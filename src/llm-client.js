@@ -38,7 +38,6 @@ export async function chat(config, messages, overrides = {}) {
       const token = provider.parse(line.trim())
       if (token) {
         output += token
-        process.stdout.write(token)
       }
     }
   }
@@ -47,10 +46,8 @@ export async function chat(config, messages, overrides = {}) {
     const token = provider.parse(buffer.trim())
     if (token) {
       output += token
-      process.stdout.write(token)
     }
   }
-  process.stdout.write("\n")
 
   if (!output.trim()) throw new Error("LLM returned an empty response")
   return output
@@ -137,16 +134,22 @@ function runCodex(bin, args, stdin) {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, {
       cwd: process.cwd(),
-      stdio: ["pipe", "inherit", "inherit"],
+      stdio: ["pipe", "ignore", "pipe"],
       env: process.env,
     })
+    let stderr = ""
 
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+      if (stderr.length > 12000) stderr = stderr.slice(-12000)
+    })
     child.on("error", reject)
     child.on("close", (code, signal) => {
       if (code === 0) {
         resolve()
       } else {
-        reject(new Error(`Codex CLI failed${signal ? ` with signal ${signal}` : ` with exit code ${code}`}`))
+        const reason = signal ? `with signal ${signal}` : `with exit code ${code}`
+        reject(new Error(`Codex CLI failed ${reason}${stderr.trim() ? `:\n${stderr.trim()}` : ""}`))
       }
     })
 

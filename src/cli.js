@@ -1,6 +1,7 @@
 import path from "node:path"
 import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
 import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
 import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
@@ -21,20 +22,44 @@ export async function run() {
 
   const purpose = await readOptional(ideaFile)
   const files = await listSourceFiles(sourceDir, options)
+  const manifest = await loadManifest(outputDir)
+  const startedAt = Date.now()
 
   console.log(`Source dir: ${sourceDir}`)
   console.log(`Output dir: ${outputDir}`)
   console.log(`Provider: ${llmConfig.provider}, model: ${llmConfig.model}`)
-  console.log(`Documents to ingest: ${files.length}`)
+  console.log(`Total files: ${files.length}`)
   if (options.dryRun) console.log("Dry run: files will not be written")
 
   let done = 0
+  let skipped = 0
+  let ingested = 0
   for (const filePath of files) {
     done++
     const fileName = path.basename(filePath)
-    console.log(`\n[${done}/${files.length}] ${fileName}`)
+    logProgress({
+      fileName,
+      current: done,
+      total: files.length,
+      status: "start",
+      startedAt,
+    })
 
     const sourceContent = await readFile(filePath, "utf8")
+    const sourceHash = sha256(sourceContent)
+    const existingRecord = manifest.files[fileName]
+    if (!options.force && existingRecord?.sha256 === sourceHash) {
+      skipped++
+      logProgress({
+        fileName,
+        current: done,
+        total: files.length,
+        status: "skipped",
+        startedAt,
+      })
+      continue
+    }
+
     const truncatedContent =
       sourceContent.length > MAX_SOURCE_CHARS
         ? `${sourceContent.slice(0, MAX_SOURCE_CHARS)}\n\n[...truncated...]`
@@ -44,7 +69,13 @@ export async function run() {
     const overview = await readOptional(path.join(outputDir, "wiki/overview.md"))
     const schema = buildLocalSchema()
 
-    console.log("Step 1/2: analyzing source")
+    logProgress({
+      fileName,
+      current: done,
+      total: files.length,
+      status: "analysis",
+      startedAt,
+    })
     const analysis = await chat(
       llmConfig,
       [
@@ -65,7 +96,13 @@ export async function run() {
       { temperature: 0.1, max_tokens: 4096 },
     )
 
-    console.log("Step 2/2: generating wiki files")
+    logProgress({
+      fileName,
+      current: done,
+      total: files.length,
+      status: "generation",
+      startedAt,
+    })
     const generation = await chat(
       llmConfig,
       [
@@ -108,10 +145,30 @@ export async function run() {
     const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation, { dryRun: options.dryRun })
     const reviews = await writeReviewBlocks(outputDir, generation, fileName, { dryRun: options.dryRun })
     for (const warning of warnings) console.warn(`Warning: ${warning}`)
-    console.log(`Written blocks: ${writtenPaths.length}`)
-    for (const written of writtenPaths) console.log(`- ${written}`)
-    if (reviews.length > 0) console.log(`Review items: ${reviews.length} -> wiki/reviews.md`)
+    ingested++
+    logProgress({
+      fileName,
+      current: done,
+      total: files.length,
+      status: "done",
+      startedAt,
+      detail: `written=${writtenPaths.length}, reviews=${reviews.length}`,
+    })
+
+    if (!options.dryRun) {
+      manifest.files[fileName] = {
+        sourcePath: filePath,
+        sha256: sourceHash,
+        contentLength: sourceContent.length,
+        ingestedAt: new Date().toISOString(),
+        writtenPaths,
+        reviewCount: reviews.length,
+      }
+      await saveManifest(outputDir, manifest)
+    }
   }
+
+  console.log(`Finished: total=${files.length}, ingested=${ingested}, skipped=${skipped}, elapsed=${formatDuration(Date.now() - startedAt)}`)
 }
 
 function parseArgs(argv) {
@@ -126,6 +183,7 @@ function parseArgs(argv) {
     else if (arg === "--start-after") options.startAfter = requiredValue(argv, ++i, arg)
     else if (arg === "--only") options.only = requiredValue(argv, ++i, arg)
     else if (arg === "--dry-run") options.dryRun = true
+    else if (arg === "--force") options.force = true
     else if (arg === "--help" || arg === "-h") {
       printHelp()
       process.exit(0)
@@ -154,6 +212,7 @@ Options:
   --start-after <name> Skip files until after this basename.
   --limit <n>          Ingest at most n files.
   --dry-run            Call LLM and parse output, but do not write files.
+  --force              Re-ingest even when the source hash is unchanged.
 `)
 }
 
@@ -187,6 +246,7 @@ async function ensureWikiScaffold(outputDir) {
   await writeIfMissing(path.join(wikiDir, "overview.md"), initialOverview())
   await writeIfMissing(path.join(wikiDir, "log.md"), "# Log\n")
   await writeIfMissing(path.join(wikiDir, "reviews.md"), "# Reviews\n")
+  await mkdir(path.join(outputDir, ".obsidian-llm-wiki"), { recursive: true })
 }
 
 async function writeIfMissing(filePath, content) {
@@ -257,4 +317,48 @@ function buildLocalSchema() {
     "目录类型必须反映页面语义：sources 是资料摘要，entities 是具体 entry，concepts 是抽象概念。",
     "entry 页面必须有具体正文、frontmatter、交叉引用和 sources 字段。",
   ].join("\n")
+}
+
+async function loadManifest(outputDir) {
+  const manifestPath = getManifestPath(outputDir)
+  const empty = { version: 1, files: {} }
+  try {
+    const parsed = JSON.parse(await readFile(manifestPath, "utf8"))
+    if (!parsed || typeof parsed !== "object") return empty
+    if (!parsed.files || typeof parsed.files !== "object") parsed.files = {}
+    return { version: 1, ...parsed }
+  } catch {
+    return empty
+  }
+}
+
+async function saveManifest(outputDir, manifest) {
+  const manifestPath = getManifestPath(outputDir)
+  await mkdir(path.dirname(manifestPath), { recursive: true })
+  await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8")
+}
+
+function getManifestPath(outputDir) {
+  return path.join(outputDir, ".obsidian-llm-wiki/ingested.json")
+}
+
+function sha256(content) {
+  return createHash("sha256").update(content).digest("hex")
+}
+
+function logProgress({ fileName, current, total, status, startedAt, detail = "" }) {
+  const remaining = Math.max(total - current, 0)
+  const elapsed = formatDuration(Date.now() - startedAt)
+  const suffix = detail ? `, ${detail}` : ""
+  console.log(`[${current}/${total}] ${status}: ${fileName} | remaining=${remaining}, elapsed=${elapsed}${suffix}`)
+}
+
+function formatDuration(ms) {
+  const totalSeconds = Math.floor(ms / 1000)
+  const hours = Math.floor(totalSeconds / 3600)
+  const minutes = Math.floor((totalSeconds % 3600) / 60)
+  const seconds = totalSeconds % 60
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`
+  if (minutes > 0) return `${minutes}m ${seconds}s`
+  return `${seconds}s`
 }

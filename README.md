@@ -19,6 +19,7 @@ npm run ingest -- --limit 3
 npm run ingest -- --source-dir /Users/depp/Obsidian --output-dir /Users/depp/Obsidian-Wiki-New
 npm run ingest -- --only "kafka.md"
 npm run ingest -- --dry-run --limit 1
+npm run ingest -- --only "kafka.md" --force
 ```
 
 可选 Codex CLI 环境变量：
@@ -47,3 +48,19 @@ codex --sandbox read-only -a never exec --skip-git-repo-check --ephemeral -o <tm
 - 思想说明：`/Users/depp/Obsidian/LLM Wiki.md`
 - 源文件：`/Users/depp/Obsidian/*.md`
 - 输出目录：`/Users/depp/Obsidian-Wiki-New`
+
+## 重复运行
+
+工具会维护状态文件：
+
+```text
+/Users/depp/Obsidian-Wiki-New/.obsidian-llm-wiki/ingested.json
+```
+
+每个源文件会记录 sha256、生成时间、写入的 wiki paths 和 review 数量。默认情况下，如果源文件 hash 没变，会跳过该文件，避免重复追加 `log.md` 和 `reviews.md`。
+
+需要强制重跑时使用：
+
+```bash
+npm run ingest -- --only "kafka.md" --force
+```
