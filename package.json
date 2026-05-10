@@ -1,0 +1,16 @@
+{
+  "name": "obsidian-llm-wiki",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "obsidian-llm-wiki": "./bin/obsidian-llm-wiki.js"
+  },
+  "scripts": {
+    "ingest": "node ./bin/obsidian-llm-wiki.js",
+    "check": "node --check ./bin/obsidian-llm-wiki.js && node --check ./src/*.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
