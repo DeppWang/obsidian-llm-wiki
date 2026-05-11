@@ -8,9 +8,10 @@
   },
   "scripts": {
     "ingest": "node ./bin/obsidian-llm-wiki.js",
+    "query": "node ./bin/obsidian-llm-wiki.js query",
     "check": "node --check ./bin/obsidian-llm-wiki.js && node --check ./src/*.js"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   }
 }

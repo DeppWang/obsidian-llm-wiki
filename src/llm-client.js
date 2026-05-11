@@ -70,6 +70,7 @@ export function loadLlmConfigFromEnv() {
     codexProfile: process.env.CODEX_PROFILE || "",
     codexOss: process.env.CODEX_OSS === "1" || process.env.CODEX_OSS === "true",
     codexLocalProvider: process.env.CODEX_LOCAL_PROVIDER || "",
+    codexTimeoutMs: Number.parseInt(process.env.CODEX_TIMEOUT_MS || "600000", 10),
   }
 }
 
@@ -106,7 +107,7 @@ async function chatWithCodexCli(config, messages, _overrides) {
   args.push("-")
 
   try {
-    await runCodex(config.codexBin, args, prompt)
+    await runCodex(config.codexBin, args, prompt, config.codexTimeoutMs)
     const output = await readFile(outputFile, "utf8")
     if (!output.trim()) throw new Error("Codex CLI returned an empty final message")
     return output
@@ -130,21 +131,38 @@ function renderCodexPrompt(messages) {
   ].join("\n")
 }
 
-function runCodex(bin, args, stdin) {
+function runCodex(bin, args, stdin, timeoutMs) {
   return new Promise((resolve, reject) => {
+    let settled = false
     const child = spawn(bin, args, {
       cwd: process.cwd(),
       stdio: ["pipe", "ignore", "pipe"],
       env: process.env,
     })
+    const timer = timeoutMs
+      ? setTimeout(() => {
+        if (settled) return
+        settled = true
+        child.kill("SIGTERM")
+        reject(new Error(`Codex CLI timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      : null
     let stderr = ""
 
     child.stderr.on("data", (chunk) => {
       stderr += chunk.toString()
       if (stderr.length > 12000) stderr = stderr.slice(-12000)
     })
-    child.on("error", reject)
+    child.on("error", (err) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      reject(err)
+    })
     child.on("close", (code, signal) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
       if (code === 0) {
         resolve()
       } else {

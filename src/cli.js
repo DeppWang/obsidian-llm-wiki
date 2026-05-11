@@ -13,8 +13,8 @@ const MAX_SOURCE_CHARS = 50000
 const CACHE_DIR = ".llm-wiki"
 const CACHE_FILE = "ingest-cache.json"
 
-export async function run() {
-  const options = parseArgs(process.argv.slice(2))
+export async function run(argv = process.argv.slice(2)) {
+  const options = parseArgs(argv)
   const sourceDir = options.sourceDir || DEFAULT_SOURCE_DIR
   const outputDir = options.outputDir || DEFAULT_OUTPUT_DIR
   const ideaFile = options.ideaFile || DEFAULT_IDEA_FILE
