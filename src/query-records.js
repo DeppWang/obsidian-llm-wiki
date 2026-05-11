@@ -17,6 +17,21 @@ export async function saveQueryRecord(record, options = {}) {
   return { markdownPath, jsonPath }
 }
 
+export async function saveChatRecord(session, options = {}) {
+  const queryDir = options.queryDir || DEFAULT_QUERY_DIR
+  const timestamp = session.startedAt || new Date().toISOString()
+  const title = session.title || session.turns?.[0]?.question || "chat"
+  const baseName = session.baseName || `${safeTimestamp(timestamp)}-${slugify(title)}`
+  const markdownPath = path.join(queryDir, `${baseName}.md`)
+  const jsonPath = path.join(queryDir, `${baseName}.json`)
+
+  await mkdir(queryDir, { recursive: true })
+  await writeFile(markdownPath, renderChatMarkdown({ ...session, baseName }), "utf8")
+  await writeFile(jsonPath, `${JSON.stringify({ ...session, baseName }, null, 2)}\n`, "utf8")
+
+  return { markdownPath, jsonPath, baseName }
+}
+
 function renderMarkdownRecord(record) {
   return [
     "---",
@@ -44,6 +59,39 @@ function renderMarkdownRecord(record) {
     "",
     renderFallbackSources(record.fallback?.sources || []),
     "",
+  ].join("\n")
+}
+
+function renderChatMarkdown(session) {
+  const turns = Array.isArray(session.turns) ? session.turns : []
+  return [
+    "---",
+    "type: chat-record",
+    `started: ${session.startedAt}`,
+    `updated: ${session.updatedAt}`,
+    `turns: ${turns.length}`,
+    "---",
+    "",
+    "# Chat",
+    "",
+    ...turns.flatMap((turn, index) => [
+      `## Turn ${index + 1}`,
+      "",
+      "### User",
+      "",
+      turn.question,
+      "",
+      "### Assistant",
+      "",
+      turn.answer || "",
+      "",
+      "### Metadata",
+      "",
+      `- answer_source: ${turn.answerSource}`,
+      `- fallback_used: ${turn.fallbackUsed}`,
+      `- wiki_results: ${turn.wiki?.results?.length || 0}`,
+      "",
+    ]),
   ].join("\n")
 }
 

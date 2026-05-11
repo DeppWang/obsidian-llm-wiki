@@ -6,6 +6,7 @@
 
 - ingest：源文档 -> wiki 文件。
 - query：优先基于当前 wiki 问答；如果 wiki 没有足够答案，则联网查询，并保存问答记录。
+- chat：类似 Codex 的终端交互式聊天 shell，复用 query 的 Wiki 检索和 fallback，并将一次会话保存为一个记录文件。
 
 不会实现 lint、图片处理或 UI。
 
@@ -21,6 +22,12 @@ npm run ingest
 
 ```bash
 npm run query -- "你的问题"
+```
+
+启动交互式聊天 shell：
+
+```bash
+npm run chat
 ```
 
 查询流程：
@@ -49,6 +56,24 @@ npm run query -- --force-fallback "你的问题"
 npm run query -- --no-fallback "你的问题"
 npm run query -- --query-dir /Users/depp/Obsidian-Wiki/raw/query "你的问题"
 ```
+
+聊天 shell 常用参数：
+
+```bash
+npm run chat -- --no-fallback
+npm run chat -- --history-limit 12
+npm run chat -- --min-score 0.6
+```
+
+聊天 shell 内置命令：
+
+```text
+/help
+/clear
+/exit
+```
+
+chat 模式会在同一次 shell 会话中持续更新同一个 markdown/json 记录；退出后再次启动会创建新的会话记录。
 
 ## QMD 设置
 
