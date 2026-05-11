@@ -7,9 +7,11 @@ import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
 import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
 
 const DEFAULT_SOURCE_DIR = "/Users/depp/Obsidian"
-const DEFAULT_OUTPUT_DIR = "/Users/depp/Obsidian-Wiki-New"
+const DEFAULT_OUTPUT_DIR = "/Users/depp/Obsidian-Wiki"
 const DEFAULT_IDEA_FILE = "/Users/depp/Obsidian/LLM Wiki.md"
 const MAX_SOURCE_CHARS = 50000
+const CACHE_DIR = ".llm-wiki"
+const CACHE_FILE = "ingest-cache.json"
 
 export async function run() {
   const options = parseArgs(process.argv.slice(2))
@@ -47,7 +49,7 @@ export async function run() {
 
     const sourceContent = await readFile(filePath, "utf8")
     const sourceHash = sha256(sourceContent)
-    const existingRecord = manifest.files[fileName]
+    const existingRecord = getManifestRecord(manifest, fileName)
     if (!options.force && existingRecord?.sha256 === sourceHash) {
       skipped++
       logProgress({
@@ -156,14 +158,14 @@ export async function run() {
     })
 
     if (!options.dryRun) {
-      manifest.files[fileName] = {
+      updateManifestRecord(manifest, fileName, {
         sourcePath: filePath,
         sha256: sourceHash,
         contentLength: sourceContent.length,
         ingestedAt: new Date().toISOString(),
         writtenPaths,
         reviewCount: reviews.length,
-      }
+      })
       await saveManifest(outputDir, manifest)
     }
   }
@@ -246,7 +248,7 @@ async function ensureWikiScaffold(outputDir) {
   await writeIfMissing(path.join(wikiDir, "overview.md"), initialOverview())
   await writeIfMissing(path.join(wikiDir, "log.md"), "# Log\n")
   await writeIfMissing(path.join(wikiDir, "reviews.md"), "# Reviews\n")
-  await mkdir(path.join(outputDir, ".obsidian-llm-wiki"), { recursive: true })
+  await mkdir(path.join(outputDir, CACHE_DIR), { recursive: true })
 }
 
 async function writeIfMissing(filePath, content) {
@@ -312,7 +314,7 @@ sources: []
 function buildLocalSchema() {
   return [
     "该 wiki 是 LLM 维护的 Obsidian markdown 知识库。",
-    "源文件来自 /Users/depp/Obsidian/*.md，输出到 /Users/depp/Obsidian-Wiki-New/wiki。",
+    "源文件来自 /Users/depp/Obsidian/*.md，输出到 /Users/depp/Obsidian-Wiki/wiki。",
     "每次只处理一个源文档；LLM 先分析，再生成 FILE blocks。",
     "目录类型必须反映页面语义：sources 是资料摘要，entities 是具体 entry，concepts 是抽象概念。",
     "entry 页面必须有具体正文、frontmatter、交叉引用和 sources 字段。",
@@ -320,15 +322,56 @@ function buildLocalSchema() {
 }
 
 async function loadManifest(outputDir) {
-  const manifestPath = getManifestPath(outputDir)
-  const empty = { version: 1, files: {} }
+  const manifest = { version: 1, files: {}, entries: {} }
+  const current = await readJson(getManifestPath(outputDir))
+  if (current) mergeManifest(manifest, current)
+
+  return manifest
+}
+
+async function readJson(filePath) {
   try {
-    const parsed = JSON.parse(await readFile(manifestPath, "utf8"))
-    if (!parsed || typeof parsed !== "object") return empty
-    if (!parsed.files || typeof parsed.files !== "object") parsed.files = {}
-    return { version: 1, ...parsed }
+    const parsed = JSON.parse(await readFile(filePath, "utf8"))
+    return parsed && typeof parsed === "object" ? parsed : null
   } catch {
-    return empty
+    return null
+  }
+}
+
+function mergeManifest(manifest, parsed) {
+  if (parsed.files && typeof parsed.files === "object") {
+    manifest.files = { ...manifest.files, ...parsed.files }
+  }
+  if (parsed.entries && typeof parsed.entries === "object") {
+    manifest.entries = { ...manifest.entries, ...parsed.entries }
+  }
+}
+
+function getManifestRecord(manifest, fileName) {
+  const fileRecord = manifest.files[fileName]
+  if (fileRecord?.sha256) return fileRecord
+
+  const entry = manifest.entries[fileName]
+  if (!entry?.hash) return null
+  return {
+    sourcePath: entry.sourcePath,
+    sha256: entry.hash,
+    contentLength: entry.contentLength,
+    ingestedAt: entry.ingestedAt || (entry.timestamp ? new Date(entry.timestamp).toISOString() : undefined),
+    writtenPaths: entry.filesWritten,
+    reviewCount: entry.reviewCount,
+  }
+}
+
+function updateManifestRecord(manifest, fileName, record) {
+  manifest.files[fileName] = record
+  manifest.entries[fileName] = {
+    hash: record.sha256,
+    timestamp: Date.parse(record.ingestedAt),
+    filesWritten: record.writtenPaths,
+    sourcePath: record.sourcePath,
+    contentLength: record.contentLength,
+    reviewCount: record.reviewCount,
   }
 }
 
@@ -339,7 +382,7 @@ async function saveManifest(outputDir, manifest) {
 }
 
 function getManifestPath(outputDir) {
-  return path.join(outputDir, ".obsidian-llm-wiki/ingested.json")
+  return path.join(outputDir, CACHE_DIR, CACHE_FILE)
 }
 
 function sha256(content) {
