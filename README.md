@@ -26,7 +26,7 @@ npm run ingest -- --only "kafka.md" --force
 
 - `CODEX_CLI`: codex 可执行文件路径，默认 `codex`
 - `CODEX_PROFILE`: 使用 `~/.codex/config.toml` 中的 profile
-- `LLM_WIKI_MODEL`: 传给 `codex exec -m`
+- `LLM_WIKI_MODEL`: 传给 `codex exec -m`，默认 `gpt-5.4-mini`
 - `CODEX_OSS=1`: 传给 `codex exec --oss`
 - `CODEX_LOCAL_PROVIDER=ollama|lmstudio`: 传给 `codex exec --local-provider`
 
