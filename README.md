@@ -147,3 +147,32 @@ codex --sandbox read-only -a never exec --skip-git-repo-check --ephemeral -o <tm
 ```bash
 npm run ingest -- --only "kafka.md" --force
 ```
+
+## macOS 定时 ingest
+
+可以用 `launchd` 每小时检查一次。如果当前目录下已有 `npm run ingest` 在运行，就跳过；如果没有，就启动一次。
+
+安装：
+
+```bash
+npm run install:launchd-ingest
+```
+
+查看状态：
+
+```bash
+launchctl print gui/$(id -u)/com.depp.obsidian-llm-wiki.ingest
+```
+
+查看日志：
+
+```bash
+tail -f ~/Library/Logs/obsidian-llm-wiki/ingest.log
+```
+
+停止并卸载：
+
+```bash
+launchctl bootout gui/$(id -u) ~/Library/LaunchAgents/com.depp.obsidian-llm-wiki.ingest.plist
+rm ~/Library/LaunchAgents/com.depp.obsidian-llm-wiki.ingest.plist
+```

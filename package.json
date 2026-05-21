@@ -10,6 +10,7 @@
     "ingest": "node ./bin/obsidian-llm-wiki.js",
     "query": "node ./bin/obsidian-llm-wiki.js query",
     "chat": "node ./bin/obsidian-llm-wiki.js chat",
+    "install:launchd-ingest": "zsh ./scripts/install-launchd-ingest.zsh",
     "check": "node --check ./bin/obsidian-llm-wiki.js && node --check ./src/*.js"
   },
   "engines": {

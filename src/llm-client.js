@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm } from "node:fs/promises"
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
@@ -71,6 +71,7 @@ export function loadLlmConfigFromEnv() {
     codexOss: process.env.CODEX_OSS === "1" || process.env.CODEX_OSS === "true",
     codexLocalProvider: process.env.CODEX_LOCAL_PROVIDER || "",
     codexTimeoutMs: Number.parseInt(process.env.CODEX_TIMEOUT_MS || "600000", 10),
+    codexRetries: Number.parseInt(process.env.CODEX_RETRIES || "2", 10),
   }
 }
 
@@ -82,9 +83,41 @@ function defaultModel(provider) {
 }
 
 async function chatWithCodexCli(config, messages, _overrides) {
-  const workDir = await mkdtemp(path.join(tmpdir(), "obsidian-llm-wiki-codex-"))
-  const outputFile = path.join(workDir, "last-message.md")
   const prompt = renderCodexPrompt(messages)
+  const retryCount = Number.isFinite(config.codexRetries) && config.codexRetries > 0
+    ? config.codexRetries
+    : 0
+  let lastError = null
+
+  for (let attempt = 0; attempt <= retryCount; attempt++) {
+    const workDir = await mkdtemp(path.join(tmpdir(), "obsidian-llm-wiki-codex-"))
+    const outputFile = path.join(workDir, "last-message.md")
+    const promptFile = path.join(workDir, "prompt.md")
+    const stderrFile = path.join(workDir, "stderr.log")
+
+    try {
+      await writeFile(promptFile, prompt, "utf8")
+      await runCodex(config.codexBin, buildCodexArgs(config, outputFile), prompt, config.codexTimeoutMs, stderrFile)
+      const output = await readFile(outputFile, "utf8")
+      if (!output.trim()) throw new Error("Codex CLI returned an empty final message")
+      await rm(workDir, { recursive: true, force: true }).catch(() => {})
+      return output
+    } catch (err) {
+      lastError = err
+      if (attempt < retryCount && isRetryableCodexError(err)) {
+        console.warn(`Warning: Codex CLI returned no usable output. Retrying ${attempt + 1}/${retryCount}...`)
+        await rm(workDir, { recursive: true, force: true }).catch(() => {})
+        continue
+      }
+
+      throw new Error(`${err.message}\nCodex debug files kept at: ${workDir}`)
+    }
+  }
+
+  throw lastError
+}
+
+function buildCodexArgs(config, outputFile) {
   const args = [
     "--sandbox",
     "read-only",
@@ -105,15 +138,11 @@ async function chatWithCodexCli(config, messages, _overrides) {
   if (config.codexLocalProvider) args.push("--local-provider", config.codexLocalProvider)
 
   args.push("-")
+  return args
+}
 
-  try {
-    await runCodex(config.codexBin, args, prompt, config.codexTimeoutMs)
-    const output = await readFile(outputFile, "utf8")
-    if (!output.trim()) throw new Error("Codex CLI returned an empty final message")
-    return output
-  } finally {
-    await rm(workDir, { recursive: true, force: true }).catch(() => {})
-  }
+function isRetryableCodexError(err) {
+  return err?.message?.includes("empty final message") || err?.message?.includes("timed out")
 }
 
 function renderCodexPrompt(messages) {
@@ -131,7 +160,7 @@ function renderCodexPrompt(messages) {
   ].join("\n")
 }
 
-function runCodex(bin, args, stdin, timeoutMs) {
+function runCodex(bin, args, stdin, timeoutMs, stderrFile) {
   return new Promise((resolve, reject) => {
     let settled = false
     const child = spawn(bin, args, {
@@ -140,10 +169,11 @@ function runCodex(bin, args, stdin, timeoutMs) {
       env: process.env,
     })
     const timer = timeoutMs
-      ? setTimeout(() => {
+      ? setTimeout(async () => {
         if (settled) return
         settled = true
         child.kill("SIGTERM")
+        if (stderrFile) await writeFile(stderrFile, stderr, "utf8").catch(() => {})
         reject(new Error(`Codex CLI timed out after ${timeoutMs}ms`))
       }, timeoutMs)
       : null
@@ -159,10 +189,11 @@ function runCodex(bin, args, stdin, timeoutMs) {
       if (timer) clearTimeout(timer)
       reject(err)
     })
-    child.on("close", (code, signal) => {
+    child.on("close", async (code, signal) => {
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
+      if (stderrFile) await writeFile(stderrFile, stderr, "utf8").catch(() => {})
       if (code === 0) {
         resolve()
       } else {
