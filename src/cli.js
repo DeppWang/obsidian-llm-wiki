@@ -7,6 +7,7 @@ import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
 import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
 import { loadRelatedPages, validatePageUpdates } from "./ingest-context.js"
 import { generateWikiOutput } from "./ingest-generation.js"
+import { addSourceReference } from "./source-reference.js"
 import { hasSourceTag, normalizeTag } from "./source-tags.js"
 import { homedir } from "node:os"
 
@@ -146,7 +147,7 @@ export async function run(argv = process.argv.slice(2)) {
           ].join("\n"),
         },
       ]
-    const generation = await generateWikiOutput({
+    const generated = await generateWikiOutput({
       messages: generationMessages,
       sourcePath: `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`,
       outputDir,
@@ -154,6 +155,7 @@ export async function run(argv = process.argv.slice(2)) {
       generate: (messages) => chat(llmConfig, messages, { temperature: 0.1, max_tokens: 8192 }),
       validate: (blocks) => validatePageUpdates(outputDir, blocks, relatedPages),
     })
+    const generation = addSourceReference(generated, `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`, filePath)
     const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation, { dryRun: options.dryRun })
     const reviews = await writeReviewBlocks(outputDir, generation, fileName, { dryRun: options.dryRun })
     for (const warning of warnings) console.warn(`Warning: ${warning}`)
