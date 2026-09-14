@@ -3,7 +3,9 @@ import { pathToFileURL } from "node:url"
 export function addSourceReference(output, sourcePath, originalPath) {
   const url = pathToFileURL(originalPath).href
   const notice = `<!-- original-source -->\n> 本页是整理版，不是原文。[打开原始笔记](${url})\n> 原始路径：${JSON.stringify(originalPath)}\n<!-- /original-source -->`
-  const lines = output.split("\n")
+  const lines = output
+    .replace(/\n*<!-- original-source -->[\s\S]*?<!-- \/original-source -->\n*/g, "\n")
+    .split("\n")
   const start = lines.findIndex((line) => {
     const match = line.match(/^---\s*FILE:\s*(.+?)\s*---\s*$/i)
     return match?.[1] === sourcePath
