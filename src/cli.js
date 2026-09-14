@@ -5,7 +5,7 @@ import { createHash } from "node:crypto"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
 import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
 import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
-import { loadRelatedPages, validatePageUpdates } from "./ingest-context.js"
+import { loadRelatedPages, validatePageUpdates, validateWikiLinks } from "./ingest-context.js"
 import { generateWikiOutput } from "./ingest-generation.js"
 import { addSourceReference } from "./source-reference.js"
 import { hasSourceTag, normalizeTag } from "./source-tags.js"
@@ -30,6 +30,7 @@ export async function run(argv = process.argv.slice(2)) {
 
   const purpose = await readOptional(ideaFile)
   const files = await listSourceFiles(sourceDir, options)
+  const plannedSourcePaths = files.map((filePath) => `wiki/sources/${path.basename(filePath).replace(/\.[^.]+$/, "")}.md`)
   const manifest = await loadManifest(outputDir)
   const startedAt = Date.now()
 
@@ -153,7 +154,10 @@ export async function run(argv = process.argv.slice(2)) {
       outputDir,
       dryRun: options.dryRun,
       generate: (messages) => chat(llmConfig, messages, { temperature: 0.1, max_tokens: 8192 }),
-      validate: (blocks) => validatePageUpdates(outputDir, blocks, relatedPages),
+      validate: async (blocks) => {
+        await validatePageUpdates(outputDir, blocks, relatedPages)
+        await validateWikiLinks(outputDir, blocks, plannedSourcePaths)
+      },
     })
     const generation = addSourceReference(generated, `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`, filePath)
     const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation, { dryRun: options.dryRun })

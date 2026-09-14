@@ -1,5 +1,6 @@
 import path from "node:path"
 import { readdir, readFile } from "node:fs/promises"
+import { findBrokenWikiLinks } from "./wiki-links.js"
 
 export async function loadRelatedPages(outputDir, text, previousPaths = [], maxChars = 60000) {
   const pages = []
@@ -52,4 +53,32 @@ export async function validatePageUpdates(outputDir, blocks, relatedPages) {
     }
     throw new Error(`Cannot update a page without its old text: ${block.path}`)
   }
+}
+
+export async function validateWikiLinks(outputDir, blocks, plannedSourcePaths = []) {
+  const knownPaths = new Set(plannedSourcePaths.map((value) => value.replace(/^wiki\//, "")))
+  async function visit(dir) {
+    let entries
+    try {
+      entries = await readdir(dir, { withFileTypes: true })
+    } catch (error) {
+      if (error.code === "ENOENT") return
+      throw error
+    }
+    for (const entry of entries) {
+      const absolute = path.join(dir, entry.name)
+      if (entry.isDirectory()) await visit(absolute)
+      else if (entry.name.endsWith(".md")) knownPaths.add(path.relative(path.join(outputDir, "wiki"), absolute).split(path.sep).join("/"))
+    }
+  }
+  await visit(path.join(outputDir, "wiki"))
+  for (const block of blocks) knownPaths.add(block.path.replace(/^wiki\//, ""))
+  const failures = []
+  for (const block of blocks) {
+    const pagePath = block.path.replace(/^wiki\//, "")
+    for (const target of findBrokenWikiLinks(pagePath, block.content, knownPaths)) {
+      failures.push(`${block.path}: [[${target}]]`)
+    }
+  }
+  if (failures.length) throw new Error(`Broken wiki links:\n${failures.join("\n")}`)
 }

@@ -3,6 +3,7 @@ import { homedir } from "node:os"
 import { readdir, readFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
 import { hasSourceTag, normalizeTag } from "./source-tags.js"
+import { findBrokenWikiLinks, extractWikiLinks } from "./wiki-links.js"
 
 const STRUCTURAL_FILES = new Set(["index.md", "overview.md", "log.md", "reviews.md"])
 
@@ -45,6 +46,10 @@ export function auditWiki({ sourceDir, expectedSources, pages }) {
     if (!page.content.startsWith("---\n") || !/^title:\s*.+$/m.test(page.content)) {
       issues.push({ level: "error", message: `Missing frontmatter or title: ${page.path}` })
     }
+    const sourceMarkers = page.content.match(/<!-- original-source -->/g)?.length || 0
+    if (page.path.startsWith("sources/") && sourceMarkers !== 1) {
+      issues.push({ level: "error", message: `Expected one original note link in ${page.path}, found ${sourceMarkers}` })
+    }
     if (page.content.replace(/^---[\s\S]*?---/, "").trim().length < 120) {
       issues.push({ level: "warning", message: `Very short page: ${page.path}` })
     }
@@ -54,10 +59,18 @@ export function auditWiki({ sourceDir, expectedSources, pages }) {
       if (old) issues.push({ level: "warning", message: `Duplicate title: ${old}, ${page.path}` })
       else titles.set(title, page.path)
     }
-    for (const target of wikiLinks(page.content)) {
+    for (const target of extractWikiLinks(page.content)) {
       const resolved = resolveLink(page.path, target, byPath)
       if (!resolved) issues.push({ level: "error", message: `Broken link in ${page.path}: [[${target}]]` })
       else incoming.set(stripMd(resolved), (incoming.get(stripMd(resolved)) || 0) + 1)
+    }
+  }
+  const knownPaths = new Set(pages.map((page) => page.path))
+  for (const page of contentPages) {
+    for (const target of findBrokenWikiLinks(page.path, page.content, knownPaths)) {
+      if (!issues.some((item) => item.message === `Broken link in ${page.path}: [[${target}]]`)) {
+        issues.push({ level: "error", message: `Broken link in ${page.path}: [[${target}]]` })
+      }
     }
   }
 
@@ -67,11 +80,6 @@ export function auditWiki({ sourceDir, expectedSources, pages }) {
     }
   }
   return issues
-}
-
-function wikiLinks(content) {
-  return [...content.replace(/\\\|/g, "|").matchAll(/\[\[([^\]|#]+)(?:#[^\]|]+)?(?:\|[^\]]+)?\]\]/g)]
-    .map((match) => match[1].trim())
 }
 
 function resolveLink(from, target, pages) {
