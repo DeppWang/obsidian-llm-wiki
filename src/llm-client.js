@@ -4,6 +4,7 @@ import path from "node:path"
 import { spawn } from "node:child_process"
 
 const JSON_CONTENT_TYPE = "application/json"
+const CODEX_KILL_GRACE_MS = 5000
 
 export async function chat(config, messages, overrides = {}) {
   if (config.provider === "codex") return chatWithCodexCli(config, messages, overrides)
@@ -167,12 +168,13 @@ function runCodex(bin, args, stdin, timeoutMs, stderrFile) {
       cwd: process.cwd(),
       stdio: ["pipe", "ignore", "pipe"],
       env: process.env,
+      detached: process.platform !== "win32",
     })
     const timer = timeoutMs
       ? setTimeout(async () => {
         if (settled) return
         settled = true
-        child.kill("SIGTERM")
+        await terminateProcessTree(child)
         if (stderrFile) await writeFile(stderrFile, stderr, "utf8").catch(() => {})
         reject(new Error(`Codex CLI timed out after ${timeoutMs}ms`))
       }, timeoutMs)
@@ -203,6 +205,40 @@ function runCodex(bin, args, stdin, timeoutMs, stderrFile) {
     })
 
     child.stdin.end(stdin)
+  })
+}
+
+export async function terminateProcessTree(child, graceMs = CODEX_KILL_GRACE_MS) {
+  if (child.exitCode !== null || child.signalCode) return
+
+  const closed = waitForClose(child)
+  signalProcessTree(child, "SIGTERM")
+
+  if (await waitUntilClosed(closed, graceMs)) return
+  signalProcessTree(child, "SIGKILL")
+  await waitUntilClosed(closed, graceMs)
+}
+
+function signalProcessTree(child, signal) {
+  try {
+    if (process.platform === "win32") child.kill(signal)
+    else process.kill(-child.pid, signal)
+  } catch (err) {
+    if (err?.code !== "ESRCH") throw err
+  }
+}
+
+function waitForClose(child) {
+  return new Promise((resolve) => child.once("close", resolve))
+}
+
+function waitUntilClosed(closed, timeoutMs) {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs)
+    closed.then(() => {
+      clearTimeout(timer)
+      resolve(true)
+    })
   })
 }
 

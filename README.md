@@ -47,7 +47,27 @@ npm run ingest -- --dry-run --limit 1
 npm run ingest -- --only "kafka.md" --force
 ```
 
-查询常用参数：
+### 提高生成内容的可读性
+
+ingest 会读取 `<output-dir>/schema.md`，文件不存在时使用 [内置写作规则](docs/wiki-schema.md)。也可用 `--schema-file <file>` 指定规则，两阶段都会读取它。
+
+新版规则保留个人笔记的背景、命令和例子，允许不建实体或概念页。命令、配置项和泛称通常放在主题正文中。overview 用来安排阅读顺序，index 保留完整目录。
+
+生成前会按文件名、页面标题和分析中的名称匹配旧页，并优先读取上次处理该来源时写过的页面。旧正文总量最多 60000 字符，不截断单页。这是名称匹配，不是语义搜索，可能漏选。未提供旧正文的页面不能被覆盖；若模型仍尝试覆盖，整次写入会停止。输出缺少来源页或有损坏的 FILE block 时也会停止，不写入缓存。
+
+先在新目录选一篇有代表性的笔记验证：
+
+```bash
+npm run ingest -- --output-dir /Users/depp/Obsidian-Wiki-New --schema-file ./docs/wiki-schema.md --only "kafka.md" --force
+```
+
+先检查开头是否清楚、操作细节是否保留、拆页是否合理、旧知识是否保留，再决定是否批量重跑。更改 schema 或模型不会自动使缓存失效，需要 `--force`。已有旧页不会自动合并或删除。
+
+默认模型保持不变。要比较模型，可设置 `LLM_WIKI_MODEL`，使用相同输入、相同 schema 和两个新的输出目录做对照。先修写作规则与旧页上下文，再判断是否需要换模型。
+
+`--dry-run` 仍会调用模型，但不会创建目录、写 Wiki 或更新缓存。
+
+### 查询参数
 
 ```bash
 npm run query -- --collection obsidian-wiki "你的问题"

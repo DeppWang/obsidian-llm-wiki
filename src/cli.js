@@ -4,7 +4,8 @@ import { existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
 import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
-import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
+import { parseFileBlocks, writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
+import { loadRelatedPages, validatePageUpdates } from "./ingest-context.js"
 
 const DEFAULT_SOURCE_DIR = "/Users/depp/Obsidian"
 const DEFAULT_OUTPUT_DIR = "/Users/depp/Obsidian-Wiki"
@@ -20,7 +21,8 @@ export async function run(argv = process.argv.slice(2)) {
   const ideaFile = options.ideaFile || DEFAULT_IDEA_FILE
   const llmConfig = loadLlmConfigFromEnv()
 
-  await ensureWikiScaffold(outputDir)
+  const schema = await loadSchema(options.schemaFile, outputDir)
+  if (!options.dryRun) await ensureWikiScaffold(outputDir)
 
   const purpose = await readOptional(ideaFile)
   const files = await listSourceFiles(sourceDir, options)
@@ -69,7 +71,6 @@ export async function run(argv = process.argv.slice(2)) {
 
     const index = await readOptional(path.join(outputDir, "wiki/index.md"))
     const overview = await readOptional(path.join(outputDir, "wiki/overview.md"))
-    const schema = buildLocalSchema()
 
     logProgress({
       fileName,
@@ -81,7 +82,7 @@ export async function run(argv = process.argv.slice(2)) {
     const analysis = await chat(
       llmConfig,
       [
-        { role: "system", content: buildAnalysisPrompt({ purpose, index, sourceContent: truncatedContent }) },
+        { role: "system", content: buildAnalysisPrompt({ purpose, index, schema, sourceContent: truncatedContent }) },
         {
           role: "user",
           content: [
@@ -105,6 +106,7 @@ export async function run(argv = process.argv.slice(2)) {
       status: "generation",
       startedAt,
     })
+    const relatedPages = await loadRelatedPages(outputDir, `${fileName}\n${truncatedContent}\n${analysis}`, existingRecord?.writtenPaths)
     const generation = await chat(
       llmConfig,
       [
@@ -115,6 +117,7 @@ export async function run(argv = process.argv.slice(2)) {
             index,
             overview,
             schema,
+            relatedPages,
             sourceFileName: fileName,
             sourceContent: truncatedContent,
           }),
@@ -144,6 +147,11 @@ export async function run(argv = process.argv.slice(2)) {
       { temperature: 0.1, max_tokens: 8192 },
     )
 
+    const parsed = parseFileBlocks(generation)
+    if (parsed.warnings.length || !parsed.blocks.some((block) => block.path === `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`)) {
+      throw new Error(`Incomplete wiki output for ${fileName}: ${parsed.warnings.join("; ") || "missing source page"}`)
+    }
+    await validatePageUpdates(outputDir, parsed.blocks, relatedPages)
     const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation, { dryRun: options.dryRun })
     const reviews = await writeReviewBlocks(outputDir, generation, fileName, { dryRun: options.dryRun })
     for (const warning of warnings) console.warn(`Warning: ${warning}`)
@@ -181,6 +189,7 @@ function parseArgs(argv) {
     if (arg === "--source-dir") options.sourceDir = requiredValue(argv, ++i, arg)
     else if (arg === "--output-dir") options.outputDir = requiredValue(argv, ++i, arg)
     else if (arg === "--idea-file") options.ideaFile = requiredValue(argv, ++i, arg)
+    else if (arg === "--schema-file") options.schemaFile = requiredValue(argv, ++i, arg)
     else if (arg === "--limit") options.limit = Number.parseInt(requiredValue(argv, ++i, arg), 10)
     else if (arg === "--start-after") options.startAfter = requiredValue(argv, ++i, arg)
     else if (arg === "--only") options.only = requiredValue(argv, ++i, arg)
@@ -210,6 +219,7 @@ Options:
   --source-dir <dir>   Source markdown directory. Default: ${DEFAULT_SOURCE_DIR}
   --output-dir <dir>   Wiki project output directory. Default: ${DEFAULT_OUTPUT_DIR}
   --idea-file <file>   LLM Wiki idea file. Default: ${DEFAULT_IDEA_FILE}
+  --schema-file <file> Writing rules. Default: <output-dir>/schema.md, then built-in rules.
   --only <name>        Ingest only one markdown file by basename.
   --start-after <name> Skip files until after this basename.
   --limit <n>          Ingest at most n files.
@@ -311,14 +321,14 @@ sources: []
 `
 }
 
-function buildLocalSchema() {
-  return [
-    "该 wiki 是 LLM 维护的 Obsidian markdown 知识库。",
-    "源文件来自 /Users/depp/Obsidian/*.md，输出到 /Users/depp/Obsidian-Wiki/wiki。",
-    "每次只处理一个源文档；LLM 先分析，再生成 FILE blocks。",
-    "目录类型必须反映页面语义：sources 是资料摘要，entities 是具体 entry，concepts 是抽象概念。",
-    "entry 页面必须有具体正文、frontmatter、交叉引用和 sources 字段。",
-  ].join("\n")
+async function loadSchema(schemaFile, outputDir) {
+  if (schemaFile) return readFile(path.resolve(schemaFile), "utf8")
+  try {
+    return await readFile(path.join(outputDir, "schema.md"), "utf8")
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error
+    return readFile(new URL("../docs/wiki-schema.md", import.meta.url), "utf8")
+  }
 }
 
 async function loadManifest(outputDir) {
