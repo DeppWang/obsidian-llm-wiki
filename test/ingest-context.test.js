@@ -35,7 +35,8 @@ test("dry run loads custom schema in both stages without creating output", async
     const output = path.join(dir, "output")
     const schema = path.join(dir, "schema.md")
     await mkdir(source)
-    await writeFile(path.join(source, "note.md"), "A short note")
+    await writeFile(path.join(source, "note.md"), "#git\nA short note")
+    await writeFile(path.join(source, "aaa.md"), "#github\nSkip this note")
     await writeFile(schema, "TEST WRITING RULE")
     process.env.LLM_WIKI_PROVIDER = "custom"
     process.env.LLM_WIKI_ENDPOINT = "http://test.invalid"
@@ -44,9 +45,11 @@ test("dry run loads custom schema in both stages without creating output", async
       const content = prompts.length === 1 ? "Keep one source page" : "---FILE: wiki/sources/note.md---\n---\ntype: source\n---\n# Note\n---END FILE---"
       return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n`)
     }
-    await run(["--source-dir", source, "--output-dir", output, "--schema-file", schema, "--dry-run"])
+    await run(["git", output, "--source-dir", source, "--schema-file", schema, "--limit", "1", "--dry-run"])
     assert.equal(prompts.length, 2)
     for (const messages of prompts) assert.match(messages[0].content, /TEST WRITING RULE/)
+    assert.match(prompts[0][1].content, /A short note/)
+    assert.doesNotMatch(prompts[0][1].content, /Skip this note/)
     await assert.rejects(access(output), { code: "ENOENT" })
   } finally {
     globalThis.fetch = oldFetch

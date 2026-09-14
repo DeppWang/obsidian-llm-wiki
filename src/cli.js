@@ -4,8 +4,11 @@ import { existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
 import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
-import { parseFileBlocks, writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
+import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
 import { loadRelatedPages, validatePageUpdates } from "./ingest-context.js"
+import { generateWikiOutput } from "./ingest-generation.js"
+import { hasSourceTag, normalizeTag } from "./source-tags.js"
+import { homedir } from "node:os"
 
 const DEFAULT_SOURCE_DIR = "/Users/depp/Obsidian"
 const DEFAULT_OUTPUT_DIR = "/Users/depp/Obsidian-Wiki"
@@ -16,8 +19,8 @@ const CACHE_FILE = "ingest-cache.json"
 
 export async function run(argv = process.argv.slice(2)) {
   const options = parseArgs(argv)
-  const sourceDir = options.sourceDir || DEFAULT_SOURCE_DIR
-  const outputDir = options.outputDir || DEFAULT_OUTPUT_DIR
+  const sourceDir = expandPath(options.sourceDir || DEFAULT_SOURCE_DIR)
+  const outputDir = expandPath(options.outputDir || DEFAULT_OUTPUT_DIR)
   const ideaFile = options.ideaFile || DEFAULT_IDEA_FILE
   const llmConfig = loadLlmConfigFromEnv()
 
@@ -33,6 +36,7 @@ export async function run(argv = process.argv.slice(2)) {
   console.log(`Output dir: ${outputDir}`)
   console.log(`Provider: ${llmConfig.provider}, model: ${llmConfig.model}`)
   console.log(`Total files: ${files.length}`)
+  if (options.tag) console.log(`Tag: #${options.tag}`)
   if (options.dryRun) console.log("Dry run: files will not be written")
 
   let done = 0
@@ -107,9 +111,7 @@ export async function run(argv = process.argv.slice(2)) {
       startedAt,
     })
     const relatedPages = await loadRelatedPages(outputDir, `${fileName}\n${truncatedContent}\n${analysis}`, existingRecord?.writtenPaths)
-    const generation = await chat(
-      llmConfig,
-      [
+    const generationMessages = [
         {
           role: "system",
           content: buildGenerationPrompt({
@@ -143,15 +145,15 @@ export async function run(argv = process.argv.slice(2)) {
             `Now emit the FILE blocks for wiki files derived from **${fileName}**.`,
           ].join("\n"),
         },
-      ],
-      { temperature: 0.1, max_tokens: 8192 },
-    )
-
-    const parsed = parseFileBlocks(generation)
-    if (parsed.warnings.length || !parsed.blocks.some((block) => block.path === `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`)) {
-      throw new Error(`Incomplete wiki output for ${fileName}: ${parsed.warnings.join("; ") || "missing source page"}`)
-    }
-    await validatePageUpdates(outputDir, parsed.blocks, relatedPages)
+      ]
+    const generation = await generateWikiOutput({
+      messages: generationMessages,
+      sourcePath: `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`,
+      outputDir,
+      dryRun: options.dryRun,
+      generate: (messages) => chat(llmConfig, messages, { temperature: 0.1, max_tokens: 8192 }),
+      validate: (blocks) => validatePageUpdates(outputDir, blocks, relatedPages),
+    })
     const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation, { dryRun: options.dryRun })
     const reviews = await writeReviewBlocks(outputDir, generation, fileName, { dryRun: options.dryRun })
     for (const warning of warnings) console.warn(`Warning: ${warning}`)
@@ -183,6 +185,7 @@ export async function run(argv = process.argv.slice(2)) {
 
 function parseArgs(argv) {
   const options = { dryRun: false }
+  const positional = []
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i]
@@ -190,6 +193,7 @@ function parseArgs(argv) {
     else if (arg === "--output-dir") options.outputDir = requiredValue(argv, ++i, arg)
     else if (arg === "--idea-file") options.ideaFile = requiredValue(argv, ++i, arg)
     else if (arg === "--schema-file") options.schemaFile = requiredValue(argv, ++i, arg)
+    else if (arg === "--tag") options.tag = requiredValue(argv, ++i, arg)
     else if (arg === "--limit") options.limit = Number.parseInt(requiredValue(argv, ++i, arg), 10)
     else if (arg === "--start-after") options.startAfter = requiredValue(argv, ++i, arg)
     else if (arg === "--only") options.only = requiredValue(argv, ++i, arg)
@@ -198,12 +202,31 @@ function parseArgs(argv) {
     else if (arg === "--help" || arg === "-h") {
       printHelp()
       process.exit(0)
+    } else if (!arg.startsWith("-")) {
+      positional.push(arg)
     } else {
       throw new Error(`Unknown argument: ${arg}`)
     }
   }
 
+  if (positional.length > 2) throw new Error("Use: npm run ingest -- <tag> <output-dir>")
+  if (positional[0]) {
+    if (options.tag) throw new Error("Pass the tag only once")
+    options.tag = positional[0]
+  }
+  if (positional[1]) {
+    if (options.outputDir) throw new Error("Pass the output directory only once")
+    options.outputDir = positional[1]
+  }
+  if (options.tag !== undefined) {
+    options.tag = normalizeTag(options.tag)
+    if (!options.tag || !/^[\p{L}\p{N}_\/-]+$/u.test(options.tag)) throw new Error("Invalid tag")
+  }
   return options
+}
+
+function expandPath(value) {
+  return path.resolve(value === "~" ? homedir() : value.startsWith("~/") ? path.join(homedir(), value.slice(2)) : value)
 }
 
 function requiredValue(argv, index, flag) {
@@ -213,7 +236,10 @@ function requiredValue(argv, index, flag) {
 }
 
 function printHelp() {
-  console.log(`Usage: npm run ingest -- [options]
+  console.log(`Usage: npm run ingest -- [<tag> <output-dir>] [options]
+
+Example: npm run ingest git ~/LLM-Wiki-0914
+Writes wiki pages under ~/LLM-Wiki-0914/wiki.
 
 Options:
   --source-dir <dir>   Source markdown directory. Default: ${DEFAULT_SOURCE_DIR}
@@ -221,6 +247,7 @@ Options:
   --idea-file <file>   LLM Wiki idea file. Default: ${DEFAULT_IDEA_FILE}
   --schema-file <file> Writing rules. Default: <output-dir>/schema.md, then built-in rules.
   --only <name>        Ingest only one markdown file by basename.
+  --tag <tag>          Match a full tag, ignoring case. Also accepts #tag.
   --start-after <name> Skip files until after this basename.
   --limit <n>          Ingest at most n files.
   --dry-run            Call LLM and parse output, but do not write files.
@@ -236,6 +263,13 @@ async function listSourceFiles(sourceDir, options) {
     .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
 
   if (options.only) files = files.filter((name) => name === options.only)
+  if (options.tag) {
+    const matched = []
+    for (const name of files) {
+      if (hasSourceTag(await readFile(path.join(sourceDir, name), "utf8"), options.tag)) matched.push(name)
+    }
+    files = matched
+  }
   if (options.startAfter) {
     const index = files.indexOf(options.startAfter)
     files = index >= 0 ? files.slice(index + 1) : files

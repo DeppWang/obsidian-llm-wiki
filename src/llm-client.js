@@ -2,6 +2,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { setTimeout as delay } from "node:timers/promises"
 
 const JSON_CONTENT_TYPE = "application/json"
 const CODEX_KILL_GRACE_MS = 5000
@@ -106,8 +107,10 @@ async function chatWithCodexCli(config, messages, _overrides) {
     } catch (err) {
       lastError = err
       if (attempt < retryCount && isRetryableCodexError(err)) {
-        console.warn(`Warning: Codex CLI returned no usable output. Retrying ${attempt + 1}/${retryCount}...`)
+        const waitMs = Math.min(5000 * 2 ** attempt, 30000)
+        console.warn(`Warning: ${err.message}\nRetry ${attempt + 1}/${retryCount} in ${waitMs / 1000}s...`)
         await rm(workDir, { recursive: true, force: true }).catch(() => {})
+        await delay(waitMs)
         continue
       }
 
@@ -142,8 +145,14 @@ function buildCodexArgs(config, outputFile) {
   return args
 }
 
-function isRetryableCodexError(err) {
-  return err?.message?.includes("empty final message") || err?.message?.includes("timed out")
+export function isRetryableCodexError(err) {
+  return /empty final message|timed out|model is at capacity|too many requests|rate limit|service unavailable|temporarily unavailable/i.test(err?.message || "")
+}
+
+export function summarizeCodexError(stderr) {
+  const lines = stderr.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const errors = lines.filter((line) => /^ERROR\b/i.test(line))
+  return errors.length ? [...new Set(errors)].join("\n") : "See stderr.log in the debug folder for details."
 }
 
 function renderCodexPrompt(messages) {
@@ -200,7 +209,7 @@ function runCodex(bin, args, stdin, timeoutMs, stderrFile) {
         resolve()
       } else {
         const reason = signal ? `with signal ${signal}` : `with exit code ${code}`
-        reject(new Error(`Codex CLI failed ${reason}${stderr.trim() ? `:\n${stderr.trim()}` : ""}`))
+        reject(new Error(`Codex CLI failed ${reason}:\n${summarizeCodexError(stderr)}`))
       }
     })
 

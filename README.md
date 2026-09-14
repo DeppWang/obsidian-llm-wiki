@@ -39,6 +39,18 @@ npm run chat
 
 常用参数：
 
+按标签筛选并写入一个新知识库：
+
+```bash
+npm run ingest git ~/LLM-Wiki-0914
+# 先试一篇
+npm run ingest -- git ~/LLM-Wiki-0914 --limit 1
+```
+
+这会读取 `~/Obsidian/*.md` 中包含 `git` 标签的笔记，生成页面放在 `~/LLM-Wiki-0914/wiki/`，缓存放在该项目的 `.llm-wiki/`。不读取子目录。未指定标签时仍处理全部笔记。
+
+标签支持正文的 `#git` 和 frontmatter 中的 `tags`（单值、行内列表、分行列表）。忽略大小写，完整匹配，不匹配 `#github`、`#git-branch` 或 `#git/work`。跳过代码块、行内代码和注释里的标签。标签筛选先于 `--limit` 执行。也可使用 `--tag git --output-dir <dir>`。
+
 ```bash
 npm run ingest -- --limit 3
 npm run ingest -- --source-dir /Users/depp/Obsidian --output-dir /Users/depp/Obsidian-Wiki
