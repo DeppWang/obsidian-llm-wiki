@@ -45,6 +45,11 @@ npm run chat
 npm run ingest git ~/LLM-Wiki-0914
 # 先试一篇
 npm run ingest -- git ~/LLM-Wiki-0914 --limit 1
+# 只处理几篇代表性笔记；多个 --only 前必须保留 npm 的 --
+npm run ingest -- git ~/LLM-Wiki-0914 \
+  --only "Git note.md" \
+  --only "SSH Key 配置.md" \
+  --only "macOS 利用 LaunchAgents + GitHub 自动同步文件修改.md"
 ```
 
 这会读取 `~/Obsidian/*.md` 中包含 `git` 标签的笔记，生成页面放在 `~/LLM-Wiki-0914/wiki/`，缓存放在该项目的 `.llm-wiki/`。不读取子目录。未指定标签时仍处理全部笔记。
