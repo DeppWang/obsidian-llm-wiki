@@ -27,6 +27,24 @@ test("stop after two repairs if output is still incomplete", async () => {
     messages: [], sourcePath, dryRun: true,
     generate: async () => { calls++; return "No blocks" },
     validate: async () => assert.fail("Must not validate missing pages"),
-  }), /Missing required source page/)
+  }), /Missing required pages/)
   assert.equal(calls, 3)
+})
+
+test("require more than one page for a final pass", async () => {
+  let calls = 0
+  const result = await generateWikiOutput({
+    messages: [],
+    requiredPaths: ["wiki/index.md", "wiki/overview.md"],
+    dryRun: true,
+    generate: async () => {
+      calls++
+      return calls === 1
+        ? block("wiki/index.md")
+        : `${block("wiki/index.md")}\n${block("wiki/overview.md")}`
+    },
+    validate: async () => {},
+  })
+  assert.match(result, /wiki\/overview\.md/)
+  assert.equal(calls, 2)
 })

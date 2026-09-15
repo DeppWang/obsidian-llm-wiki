@@ -3,13 +3,14 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
-import { buildAnalysisPrompt, buildGenerationPrompt } from "./prompts.js"
+import { buildAnalysisPrompt, buildGenerationPrompt, buildNavigationPrompt } from "./prompts.js"
 import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
 import { loadRelatedPages, validatePageUpdates, validateWikiLinks } from "./ingest-context.js"
 import { generateWikiOutput } from "./ingest-generation.js"
 import { addSourceReference } from "./source-reference.js"
 import { hasSourceTag, normalizeTag } from "./source-tags.js"
 import { homedir } from "node:os"
+import { loadNavigationCatalog, validateNavigationBlocks } from "./navigation.js"
 
 const DEFAULT_SOURCE_DIR = "/Users/depp/Obsidian"
 const DEFAULT_OUTPUT_DIR = "/Users/depp/Obsidian-Wiki"
@@ -184,6 +185,30 @@ export async function run(argv = process.argv.slice(2)) {
       })
       await saveManifest(outputDir, manifest)
     }
+  }
+
+  if (ingested > 0 && !options.dryRun) {
+    console.log(`[navigation] start | elapsed=${formatDuration(Date.now() - startedAt)}`)
+    const index = await readOptional(path.join(outputDir, "wiki/index.md"))
+    const overview = await readOptional(path.join(outputDir, "wiki/overview.md"))
+    const catalog = await loadNavigationCatalog(outputDir)
+    const messages = [{
+      role: "user",
+      content: buildNavigationPrompt({ purpose, schema, index, overview, catalog }),
+    }]
+    const generation = await generateWikiOutput({
+      messages,
+      requiredPaths: ["wiki/index.md", "wiki/overview.md"],
+      outputDir,
+      generate: (request) => chat(llmConfig, request, { temperature: 0.1, max_tokens: 8192 }),
+      validate: async (blocks) => {
+        validateNavigationBlocks(blocks, catalog)
+        await validateWikiLinks(outputDir, blocks)
+      },
+    })
+    const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation)
+    for (const warning of warnings) console.warn(`Warning: ${warning}`)
+    console.log(`[navigation] done | elapsed=${formatDuration(Date.now() - startedAt)}, written=${writtenPaths.length}`)
   }
 
   console.log(`Finished: total=${files.length}, ingested=${ingested}, skipped=${skipped}, elapsed=${formatDuration(Date.now() - startedAt)}`)

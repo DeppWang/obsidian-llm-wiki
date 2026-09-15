@@ -55,9 +55,10 @@ export function auditWiki({ sourceDir, expectedSources, pages }) {
     }
     const title = page.content.match(/^title:\s*["']?(.+?)["']?\s*$/m)?.[1]?.toLowerCase()
     if (title) {
-      const old = titles.get(title)
+      const titleKey = `${path.posix.dirname(page.path)}:${title}`
+      const old = titles.get(titleKey)
       if (old) issues.push({ level: "warning", message: `Duplicate title: ${old}, ${page.path}` })
-      else titles.set(title, page.path)
+      else titles.set(titleKey, page.path)
     }
     for (const target of extractWikiLinks(page.content)) {
       const resolved = resolveLink(page.path, target, byPath)

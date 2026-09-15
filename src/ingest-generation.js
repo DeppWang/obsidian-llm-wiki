@@ -3,15 +3,18 @@ import { mkdir, mkdtemp, writeFile } from "node:fs/promises"
 import { parseFileBlocks } from "./file-blocks.js"
 import { preserveSourcePath } from "./source-path.js"
 
-export async function generateWikiOutput({ messages, sourcePath, outputDir, dryRun = false, generate, validate }) {
+export async function generateWikiOutput({ messages, sourcePath, requiredPaths, outputDir, dryRun = false, generate, validate }) {
+  const required = requiredPaths || [sourcePath]
   let request = messages
   let debugDir
   for (let attempt = 0; attempt < 3; attempt++) {
-    const output = preserveSourcePath(await generate(request), sourcePath)
+    const generated = await generate(request)
+    const output = sourcePath ? preserveSourcePath(generated, sourcePath) : generated
     const parsed = parseFileBlocks(output)
     let issue = parsed.warnings.join("; ")
-    if (!parsed.blocks.some((block) => block.path === sourcePath)) {
-      issue += `${issue ? "; " : ""}Missing required source page: ${sourcePath}`
+    const missing = required.filter((requiredPath) => !parsed.blocks.some((block) => block.path === requiredPath))
+    if (missing.length) {
+      issue += `${issue ? "; " : ""}Missing required pages: ${missing.join(", ")}`
     }
     if (!issue) {
       try {
@@ -37,7 +40,7 @@ export async function generateWikiOutput({ messages, sourcePath, outputDir, dryR
     request = [
       ...messages,
       { role: "assistant", content: output },
-      { role: "user", content: `The output failed validation:\n${detail}\nReturn the full corrected set of FILE/REVIEW blocks, not a patch. Include exactly this source path: ${sourcePath}\nKeep spaces and spelling in this source path. Fix links if a path changed. Keep valid content. Do not overwrite old pages whose text was not provided; record those updates in REVIEW blocks instead.` },
+      { role: "user", content: `The output failed validation:\n${detail}\nReturn the full corrected set of FILE/REVIEW blocks, not a patch. Include these exact paths: ${required.join(", ")}\nKeep spaces and spelling in these paths. Fix links if a path changed. Keep valid content. Do not overwrite old pages whose text was not provided; record those updates in REVIEW blocks instead.` },
     ]
   }
 }

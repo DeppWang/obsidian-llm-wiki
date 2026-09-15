@@ -171,3 +171,46 @@ export function buildGenerationPrompt({ purpose, index, overview, schema, relate
     "不要输出任何 FILE/REVIEW block 之外的文字。",
   ].filter(Boolean).join("\n")
 }
+
+export function buildNavigationPrompt({ purpose, schema, index, overview, catalog }) {
+  const today = new Date().toISOString().slice(0, 10)
+  return [
+    "你是 wiki 的总编辑。全部来源已经处理完。现在只整理全局导航。",
+    "不要增加、删除或改写知识事实。不要输出内容页。",
+    "只输出 wiki/index.md 和 wiki/overview.md 两个完整 FILE blocks。",
+    "不要输出 REVIEW block 或 FILE block 之外的文字。",
+    "输出语言：中文。保留必要的英文专有名词。",
+    "",
+    "## index.md",
+    "- 它是完整目录。下方页面目录中的每一页都必须链接一次，不能漏，不能重复。",
+    "- 先按实体、概念、来源、查询、比较、综合分组。没有页面的类型可以省略。",
+    "- 某类超过 12 页时，再按读者要完成的任务使用三级标题分组。",
+    "- 每项写页面链接和一句短说明。链接必须包含目录，如 [[concepts/git分支操作|Git 分支操作]]。",
+    "- 来源页集中放在来源分组。",
+    "",
+    "## overview.md",
+    "- 它是精简的阅读入口，不是完整目录。正文连同 frontmatter 最多 80 行。",
+    "- 使用 5 到 8 个面向实际问题的二级标题。每节用一小段说明阅读路径。",
+    "- 优先链接主题页。只选最重要的入口，同一页面只能链接一次。",
+    "- 合并意思相近的主题，删除重复说明。不要列完整来源清单，不要按摄入顺序组织。",
+    "- 读者应能快速判断：遇到什么问题，从哪一页开始，接着读什么。",
+    "",
+    "## Frontmatter",
+    `- 保留原 created，updated 改为 ${today}。`,
+    "- type: overview，sources: []。保留合法 YAML。",
+    "",
+    `## 页面目录（权威清单，共 ${catalog.length} 页）`,
+    ...catalog.map((page) => `- ${page.path} | ${page.type} | ${page.title}${page.summary ? ` | ${page.summary}` : ""}`),
+    "",
+    `## 当前 index.md\n${index}`,
+    "",
+    `## 当前 overview.md\n${overview}`,
+    purpose ? `## Wiki 思想与目的\n${purpose}` : "",
+    schema ? `## Wiki Schema\n${schema}` : "",
+    "",
+    "## 输出格式",
+    "第一个字符必须是 `-`，即以 `---FILE:` 开始。",
+    "使用 `---FILE: wiki/index.md---` 和 `---FILE: wiki/overview.md---`。",
+    "每个 block 使用 `---END FILE---` 结束。",
+  ].filter(Boolean).join("\n")
+}
