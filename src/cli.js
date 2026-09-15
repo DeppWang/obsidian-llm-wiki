@@ -228,7 +228,10 @@ function parseArgs(argv) {
     else if (arg === "--tag") options.tag = requiredValue(argv, ++i, arg)
     else if (arg === "--limit") options.limit = Number.parseInt(requiredValue(argv, ++i, arg), 10)
     else if (arg === "--start-after") options.startAfter = requiredValue(argv, ++i, arg)
-    else if (arg === "--only") options.only = requiredValue(argv, ++i, arg)
+    else if (arg === "--only") {
+      options.only ||= []
+      options.only.push(requiredValue(argv, ++i, arg))
+    }
     else if (arg === "--dry-run") options.dryRun = true
     else if (arg === "--force") options.force = true
     else if (arg === "--help" || arg === "-h") {
@@ -278,7 +281,7 @@ Options:
   --output-dir <dir>   Wiki project output directory. Default: ${DEFAULT_OUTPUT_DIR}
   --idea-file <file>   LLM Wiki idea file. Default: ${DEFAULT_IDEA_FILE}
   --schema-file <file> Writing rules. Default: <output-dir>/schema.md, then built-in rules.
-  --only <name>        Ingest only one markdown file by basename.
+  --only <name>        Ingest one file by basename. Repeat to select a small batch.
   --tag <tag>          Match a full tag, ignoring case. Also accepts #tag.
   --start-after <name> Skip files until after this basename.
   --limit <n>          Ingest at most n files.
@@ -294,7 +297,10 @@ async function listSourceFiles(sourceDir, options) {
     .filter((name) => name !== path.basename(DEFAULT_IDEA_FILE))
     .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
 
-  if (options.only) files = files.filter((name) => name === options.only)
+  if (options.only?.length) {
+    const selected = new Set(options.only)
+    files = files.filter((name) => selected.has(name))
+  }
   if (options.tag) {
     const matched = []
     for (const name of files) {

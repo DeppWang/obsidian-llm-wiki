@@ -36,20 +36,25 @@ test("dry run loads custom schema in both stages without creating output", async
     const schema = path.join(dir, "schema.md")
     await mkdir(source)
     await writeFile(path.join(source, "note.md"), "#git\nA short note")
+    await writeFile(path.join(source, "second.md"), "#git\nA second note")
     await writeFile(path.join(source, "aaa.md"), "#github\nSkip this note")
     await writeFile(schema, "TEST WRITING RULE")
     process.env.LLM_WIKI_PROVIDER = "custom"
     process.env.LLM_WIKI_ENDPOINT = "http://test.invalid"
     globalThis.fetch = async (_url, options) => {
       prompts.push(JSON.parse(options.body).messages)
-      const content = prompts.length === 1 ? "Keep one source page" : "---FILE: wiki/sources/note.md---\n---\ntype: source\n---\n# Note\n---END FILE---"
+      const isAnalysis = prompts.length % 2 === 1
+      const fileName = prompts.at(-1).at(-1).content.match(/Source document to process: \*\*(.+?)\*\*/)?.[1] || "note.md"
+      const sourceName = fileName.replace(/\.md$/, "")
+      const content = isAnalysis ? "Keep one source page" : `---FILE: wiki/sources/${sourceName}.md---\n---\ntype: source\n---\n# Note\n---END FILE---`
       return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n`)
     }
-    await run(["git", output, "--source-dir", source, "--schema-file", schema, "--limit", "1", "--dry-run"])
-    assert.equal(prompts.length, 2)
+    await run(["git", output, "--source-dir", source, "--schema-file", schema, "--only", "note.md", "--only", "second.md", "--dry-run"])
+    assert.equal(prompts.length, 4)
     for (const messages of prompts) assert.match(messages[0].content, /TEST WRITING RULE/)
-    assert.match(prompts[0][1].content, /A short note/)
-    assert.doesNotMatch(prompts[0][1].content, /Skip this note/)
+    assert.ok(prompts.some((messages) => messages.at(-1).content.includes("A short note")))
+    assert.ok(prompts.some((messages) => messages.at(-1).content.includes("A second note")))
+    assert.ok(prompts.every((messages) => !messages.at(-1).content.includes("Skip this note")))
     await assert.rejects(access(output), { code: "ENOENT" })
   } finally {
     globalThis.fetch = oldFetch
