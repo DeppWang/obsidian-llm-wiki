@@ -19,6 +19,7 @@ test("load content pages for the final navigation pass", async () => {
       path: "wiki/concepts/git.md",
       type: "concept",
       title: "Git",
+      sources: "[]",
       summary: "Useful first paragraph.",
     }])
   } finally {
@@ -32,7 +33,8 @@ test("navigation prompt asks for a short overview and complete index", () => {
     schema: "Rules",
     index: "Old index",
     overview: "Old overview",
-    catalog: [{ path: "wiki/concepts/git.md", type: "concept", title: "Git", summary: "Version control" }],
+    reviews: "# Reviews",
+    catalog: [{ path: "wiki/concepts/git.md", type: "concept", title: "Git", sources: "[]", summary: "Version control" }],
   })
   assert.match(prompt, /最多 80 行/)
   assert.match(prompt, /每一页都必须链接一次/)

@@ -66,6 +66,13 @@ export function auditWiki({ sourceDir, expectedSources, pages }) {
       else incoming.set(stripMd(resolved), (incoming.get(stripMd(resolved)) || 0) + 1)
     }
   }
+  for (const page of pages.filter((item) => STRUCTURAL_FILES.has(item.path))) {
+    for (const target of extractWikiLinks(page.content)) {
+      const resolved = resolveLink(page.path, target, byPath)
+      if (!resolved) issues.push({ level: "error", message: `Broken link in ${page.path}: [[${target}]]` })
+      else incoming.set(stripMd(resolved), (incoming.get(stripMd(resolved)) || 0) + 1)
+    }
+  }
   const knownPaths = new Set(pages.map((page) => page.path))
   for (const page of contentPages) {
     for (const target of findBrokenWikiLinks(page.path, page.content, knownPaths)) {

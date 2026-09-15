@@ -24,6 +24,7 @@ export async function loadNavigationCatalog(outputDir) {
           path: pagePath,
           type: frontmatterValue(content, "type") || path.posix.dirname(pagePath).replace("wiki/", ""),
           title: frontmatterValue(content, "title") || path.basename(pagePath, ".md"),
+          sources: frontmatterValue(content, "sources") || "[]",
           summary: firstParagraph(content),
         })
       }
@@ -35,7 +36,7 @@ export async function loadNavigationCatalog(outputDir) {
 }
 
 export function validateNavigationBlocks(blocks, catalog) {
-  const expectedPaths = new Set(["wiki/index.md", "wiki/overview.md"])
+  const expectedPaths = new Set(["wiki/index.md", "wiki/overview.md", "wiki/reviews.md"])
   const returnedPaths = new Set(blocks.map((block) => block.path))
   const extra = [...returnedPaths].filter((pagePath) => !expectedPaths.has(pagePath))
   if (extra.length) throw new Error(`Navigation pass returned extra pages: ${extra.join(", ")}`)

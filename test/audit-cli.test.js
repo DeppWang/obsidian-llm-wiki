@@ -23,3 +23,12 @@ test("same title in a source and concept is allowed", () => {
   const issues = auditWiki({ sourceDir: "/notes", expectedSources: ["a.md"], pages })
   assert.equal(issues.some((item) => item.message.includes("Duplicate title")), false)
 })
+
+test("an index link prevents an orphan warning", () => {
+  const pages = [
+    { path: "concepts/git.md", content: "---\ntitle: Git\n---\n" + "Concept text. ".repeat(12) },
+    { path: "index.md", content: "[[concepts/git]]" },
+  ]
+  const issues = auditWiki({ sourceDir: "/notes", expectedSources: [], pages })
+  assert.equal(issues.some((item) => item.message.includes("Orphan page")), false)
+})

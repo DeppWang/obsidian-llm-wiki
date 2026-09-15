@@ -191,14 +191,15 @@ export async function run(argv = process.argv.slice(2)) {
     console.log(`[navigation] start | elapsed=${formatDuration(Date.now() - startedAt)}`)
     const index = await readOptional(path.join(outputDir, "wiki/index.md"))
     const overview = await readOptional(path.join(outputDir, "wiki/overview.md"))
+    const reviews = await readOptional(path.join(outputDir, "wiki/reviews.md"))
     const catalog = await loadNavigationCatalog(outputDir)
     const messages = [{
       role: "user",
-      content: buildNavigationPrompt({ purpose, schema, index, overview, catalog }),
+      content: buildNavigationPrompt({ purpose, schema, index, overview, reviews, catalog }),
     }]
     const generation = await generateWikiOutput({
       messages,
-      requiredPaths: ["wiki/index.md", "wiki/overview.md"],
+      requiredPaths: ["wiki/index.md", "wiki/overview.md", "wiki/reviews.md"],
       outputDir,
       generate: (request) => chat(llmConfig, request, { temperature: 0.1, max_tokens: 8192 }),
       validate: async (blocks) => {

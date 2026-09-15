@@ -172,12 +172,12 @@ export function buildGenerationPrompt({ purpose, index, overview, schema, relate
   ].filter(Boolean).join("\n")
 }
 
-export function buildNavigationPrompt({ purpose, schema, index, overview, catalog }) {
+export function buildNavigationPrompt({ purpose, schema, index, overview, reviews, catalog }) {
   const today = new Date().toISOString().slice(0, 10)
   return [
     "你是 wiki 的总编辑。全部来源已经处理完。现在只整理全局导航。",
     "不要增加、删除或改写知识事实。不要输出内容页。",
-    "只输出 wiki/index.md 和 wiki/overview.md 两个完整 FILE blocks。",
+    "只输出 wiki/index.md、wiki/overview.md 和 wiki/reviews.md 三个完整 FILE blocks。",
     "不要输出 REVIEW block 或 FILE block 之外的文字。",
     "输出语言：中文。保留必要的英文专有名词。",
     "",
@@ -195,22 +195,30 @@ export function buildNavigationPrompt({ purpose, schema, index, overview, catalo
     "- 合并意思相近的主题，删除重复说明。不要列完整来源清单，不要按摄入顺序组织。",
     "- 读者应能快速判断：遇到什么问题，从哪一页开始，接着读什么。",
     "",
+    "## reviews.md",
+    "- 它只保留当前仍需人工判断的问题。使用现有的简单 Markdown 格式，不加 frontmatter。",
+    "- 后续来源已经明确解决的问题必须删除。例如缺失页后来已建立并补入对应来源，就不再保留缺失复核。",
+    "- 合并重复复核，但保留仍未解决的冲突、存疑命令和缺少证据的问题。不要自行回答未决问题。",
+    "- 没有问题时只写 `# Reviews`。",
+    "",
     "## Frontmatter",
     `- 保留原 created，updated 改为 ${today}。`,
     "- type: overview，sources: []。保留合法 YAML。",
     "",
     `## 页面目录（权威清单，共 ${catalog.length} 页）`,
-    ...catalog.map((page) => `- ${page.path} | ${page.type} | ${page.title}${page.summary ? ` | ${page.summary}` : ""}`),
+    ...catalog.map((page) => `- ${page.path} | ${page.type} | ${page.title} | sources: ${page.sources}${page.summary ? ` | ${page.summary}` : ""}`),
     "",
     `## 当前 index.md\n${index}`,
     "",
     `## 当前 overview.md\n${overview}`,
+    "",
+    `## 当前 reviews.md\n${reviews}`,
     purpose ? `## Wiki 思想与目的\n${purpose}` : "",
     schema ? `## Wiki Schema\n${schema}` : "",
     "",
     "## 输出格式",
     "第一个字符必须是 `-`，即以 `---FILE:` 开始。",
-    "使用 `---FILE: wiki/index.md---` 和 `---FILE: wiki/overview.md---`。",
+    "使用 `---FILE: wiki/index.md---`、`---FILE: wiki/overview.md---` 和 `---FILE: wiki/reviews.md---`。",
     "每个 block 使用 `---END FILE---` 结束。",
   ].filter(Boolean).join("\n")
 }
