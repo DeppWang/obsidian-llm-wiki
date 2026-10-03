@@ -1,7 +1,7 @@
 import path from "node:path"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
 import { saveQueryRecord } from "./query-records.js"
-import { answerWithCodexFallback } from "./web-fallback.js"
+import { answerWithCodexFallback, isLocalFallbackSource, localCliName, localFallbackSource } from "./web-fallback.js"
 import { hasUsefulWikiResult, searchWiki } from "./wiki-query.js"
 
 const DEFAULT_OUTPUT_DIR = "/Users/depp/Obsidian-Wiki"
@@ -49,6 +49,7 @@ export async function run(argv = process.argv.slice(2)) {
   }
 
   const useWiki = !options.forceFallback && hasUsefulWikiResult(wikiResults, minScore)
+  const cliName = localCliName(llmConfig)
   let answerSource = "wiki"
   let answer = ""
   let fallback = null
@@ -57,9 +58,9 @@ export async function run(argv = process.argv.slice(2)) {
     console.log("Generating answer from Wiki results...")
     answer = await answerFromWiki(question, wikiResults, llmConfig)
   } else if (!options.noFallback) {
-    answerSource = "codex-fallback"
+    answerSource = localFallbackSource(llmConfig)
     try {
-      console.log("Wiki results were insufficient; using local Codex CLI fallback...")
+      console.log(`Wiki results were insufficient; using local ${cliName} CLI fallback...`)
       fallback = await answerWithCodexFallback(question, llmConfig)
       answer = fallback.answer
     } catch (err) {
@@ -69,7 +70,7 @@ export async function run(argv = process.argv.slice(2)) {
       answer = [
         "当前 Wiki 中没有找到足够可信的答案。",
         wikiError ? `Wiki 检索错误：${wikiError}` : "",
-        `Codex fallback 查询失败：${fallbackError}`,
+        `${cliName} fallback 查询失败：${fallbackError}`,
       ].filter(Boolean).join("\n")
     }
   } else {
@@ -77,7 +78,7 @@ export async function run(argv = process.argv.slice(2)) {
     answer = [
       "当前 Wiki 中没有找到足够可信的答案。",
       wikiError ? `Wiki 检索错误：${wikiError}` : "",
-      "已禁用 Codex fallback，因此没有继续查询。",
+      `已禁用 ${cliName} fallback，因此没有继续查询。`,
     ].filter(Boolean).join("\n")
   }
 
@@ -87,7 +88,7 @@ export async function run(argv = process.argv.slice(2)) {
     question,
     answer,
     answerSource,
-    fallbackUsed: answerSource === "codex-fallback",
+    fallbackUsed: isLocalFallbackSource(answerSource),
     wiki: {
       collection,
       minScore,
@@ -197,8 +198,8 @@ Options:
   --qmd-min-score <n>      Minimum score passed directly to QMD.
   --qmd-timeout-ms <n>     QMD query timeout in milliseconds. Default: 60000
   --qmd-bin <path>         QMD executable. Default: qmd
-  --force-fallback         Skip Wiki answer and use local Codex CLI fallback.
-  --no-fallback            Do not use local Codex CLI fallback.
+  --force-fallback         Skip the Wiki answer and use the local Codex or Grok CLI.
+  --no-fallback            Do not use the local Codex or Grok CLI.
   --dry-run                Print answer without saving query record.
 
 Aliases:

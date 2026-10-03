@@ -6,8 +6,8 @@ This repository is a private Node.js ESM CLI for building and querying an Obsidi
 
 - `bin/obsidian-llm-wiki.js`: executable entry point and command dispatcher.
 - `src/cli.js`: ingest command; reads markdown sources and writes generated wiki files.
-- `src/query-cli.js`: query command; searches the local QMD index and falls back to local Codex CLI.
-- `src/llm-client.js`: shared LLM/Codex client logic.
+- `src/query-cli.js`: query command; searches the local QMD index and falls back to the local Codex or Grok CLI.
+- `src/llm-client.js`: shared LLM client. Codex is the default. Set `LLM_WIKI_PROVIDER=grok` to use the local Grok CLI.
 - `src/file-blocks.js`, `src/prompts.js`: ingest parsing and prompt construction.
 - `src/wiki-query.js`, `src/query-records.js`, `src/web-fallback.js`, `src/process.js`: query support modules.
 - No test directory exists yet. Add tests under `test/` or `src/*.test.js` if a test runner is introduced.
@@ -19,7 +19,9 @@ Default runtime data lives outside this repo: `/Users/depp/Obsidian`, `/Users/de
 - `npm run ingest`: run the default ingest flow.
 - `npm run ingest -- --limit 3`: ingest a small batch for manual verification.
 - `npm run ingest -- --only "file.md" --force`: reprocess one source file.
-- `npm run query -- "问题"`: answer from the current Wiki, falling back to local Codex CLI.
+- `npm run query -- "问题"`: answer from the current Wiki, falling back to the local Codex CLI.
+- `npm run ingest:grok`: same ingest flow, but the model call goes through the local Grok CLI.
+- `npm run query:grok -- "问题"`: same query flow, with Grok CLI for the answer and the web fallback.
 - `npm run query -- --no-fallback "问题"`: test QMD-only behavior.
 - `npm run check`: run Node syntax checks for the CLI and all source files.
 
@@ -45,7 +47,7 @@ Current history uses short imperative summaries, for example `use gpt-5.4-mini` 
 
 ## Security & Configuration Tips
 
-Do not commit generated wiki output, query records, API keys, local `.env` files, or machine-specific cache data. Prefer environment variables for runtime configuration: `CODEX_CLI`, `LLM_WIKI_MODEL`, `QMD_BIN`, `QMD_TIMEOUT_MS`, and `CODEX_TIMEOUT_MS`.
+Do not commit generated wiki output, query records, API keys, local `.env` files, or machine-specific cache data. Prefer environment variables for runtime configuration: `CODEX_CLI`, `LLM_WIKI_MODEL`, `LLM_WIKI_PROVIDER`, `GROK_CLI`, `GROK_MODEL`, `QMD_BIN`, `QMD_TIMEOUT_MS`, and `CODEX_TIMEOUT_MS`.
 
 ## User Preferences
 

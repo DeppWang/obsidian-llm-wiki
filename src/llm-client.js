@@ -1,14 +1,29 @@
+import { createWriteStream } from "node:fs"
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { spawn } from "node:child_process"
+import { finished } from "node:stream/promises"
 import { setTimeout as delay } from "node:timers/promises"
 
 const JSON_CONTENT_TYPE = "application/json"
 const CODEX_KILL_GRACE_MS = 5000
+const GROK_TEXT_SYSTEM_PROMPT = [
+  "You are a text generator for an automated markdown wiki tool.",
+  "Follow the user prompt exactly.",
+  "Do not call tools. Do not edit files. Do not run shell commands.",
+  "Return only the requested text.",
+].join(" ")
+const GROK_WEB_SYSTEM_PROMPT = [
+  "You are the web fallback for an Obsidian wiki.",
+  "You may use web search and web fetch.",
+  "Do not edit files. Do not run shell commands.",
+  "Return only the answer text.",
+].join(" ")
 
 export async function chat(config, messages, overrides = {}) {
   if (config.provider === "codex") return chatWithCodexCli(config, messages, overrides)
+  if (config.provider === "grok") return chatWithGrokCli(config, messages, overrides)
 
   const provider = buildProvider(config, overrides)
   const response = await fetch(provider.url, {
@@ -57,7 +72,7 @@ export async function chat(config, messages, overrides = {}) {
 
 export function loadLlmConfigFromEnv() {
   const provider = process.env.LLM_WIKI_PROVIDER || "codex"
-  const model = process.env.LLM_WIKI_MODEL || process.env.OPENAI_MODEL || defaultModel(provider)
+  const model = resolveModel(provider)
   return {
     provider,
     model,
@@ -74,14 +89,36 @@ export function loadLlmConfigFromEnv() {
     codexLocalProvider: process.env.CODEX_LOCAL_PROVIDER || "",
     codexTimeoutMs: Number.parseInt(process.env.CODEX_TIMEOUT_MS || "600000", 10),
     codexRetries: Number.parseInt(process.env.CODEX_RETRIES || "2", 10),
+    grokBin: process.env.GROK_CLI || "grok",
+    grokTimeoutMs: Number.parseInt(process.env.GROK_TIMEOUT_MS || "600000", 10),
+    grokRetries: Number.parseInt(process.env.GROK_RETRIES || "2", 10),
+    grokMaxTurns: positiveInt(process.env.GROK_MAX_TURNS, 1),
+    grokFallbackMaxTurns: positiveInt(process.env.GROK_FALLBACK_MAX_TURNS, 8),
+    grokEffort: process.env.GROK_EFFORT || "low",
   }
 }
 
 function defaultModel(provider) {
   if (provider === "codex") return "gpt-5.6-luna"
+  if (provider === "grok") return "grok-4.7"
   if (provider === "anthropic") return "claude-3-5-sonnet-latest"
   if (provider === "ollama") return "llama3.1"
   return "gpt-4.1"
+}
+
+function resolveModel(provider) {
+  if (provider === "grok") {
+    if (process.env.GROK_MODEL) return process.env.GROK_MODEL
+    const shared = process.env.LLM_WIKI_MODEL || ""
+    if (shared.startsWith("grok")) return shared
+    return defaultModel("grok")
+  }
+  return process.env.LLM_WIKI_MODEL || process.env.OPENAI_MODEL || defaultModel(provider)
+}
+
+function positiveInt(value, fallback) {
+  const parsed = Number.parseInt(value || "", 10)
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback
 }
 
 async function chatWithCodexCli(config, messages, _overrides) {
@@ -146,7 +183,7 @@ function buildCodexArgs(config, outputFile) {
 }
 
 export function isRetryableCodexError(err) {
-  return /empty final message|timed out|model is at capacity|too many requests|rate limit|service unavailable|temporarily unavailable/i.test(err?.message || "")
+  return /empty final message|timed out|model is at capacity|too many requests|rate limit|service unavailable|temporarily unavailable|overloaded|\b429\b/i.test(err?.message || "")
 }
 
 export function summarizeCodexError(stderr) {
@@ -156,18 +193,198 @@ export function summarizeCodexError(stderr) {
 }
 
 function renderCodexPrompt(messages) {
-  return [
+  return renderCliPrompt(messages, [
     "You are running as the LLM backend for an automated markdown wiki ingest tool.",
     "Follow the prompts below exactly. Do not edit files or run shell commands.",
     "Return only the requested textual response.",
+  ])
+}
+
+async function chatWithGrokCli(config, messages, overrides = {}) {
+  const prompt = renderCliPrompt(messages, [
+    "Follow the prompts below exactly.",
+    overrides.webFallback
+      ? "Use web search only when the prompt needs facts from outside the wiki."
+      : "Do not use tools.",
+    "Return only the requested text.",
+  ])
+  const retryCount = Number.isFinite(config.grokRetries) && config.grokRetries > 0
+    ? config.grokRetries
+    : 0
+  let lastError = null
+
+  for (let attempt = 0; attempt <= retryCount; attempt++) {
+    const workDir = await mkdtemp(path.join(tmpdir(), "obsidian-llm-wiki-grok-"))
+    const promptFile = path.join(workDir, "prompt.md")
+    const stdoutFile = path.join(workDir, "stdout.json")
+    const stderrFile = path.join(workDir, "stderr.log")
+
+    try {
+      await writeFile(promptFile, prompt, "utf8")
+      await runGrok(
+        config.grokBin || "grok",
+        buildGrokArgs(config, workDir, promptFile, overrides),
+        config.grokTimeoutMs,
+        stdoutFile,
+        stderrFile,
+        workDir,
+      )
+      const output = parseGrokResult(await readFile(stdoutFile, "utf8"))
+      await rm(workDir, { recursive: true, force: true }).catch(() => {})
+      return output
+    } catch (err) {
+      lastError = err
+      if (attempt < retryCount && isRetryableCodexError(err)) {
+        const waitMs = Math.min(5000 * 2 ** attempt, 30000)
+        console.warn(`Warning: ${err.message}\nRetry ${attempt + 1}/${retryCount} in ${waitMs / 1000}s...`)
+        await rm(workDir, { recursive: true, force: true }).catch(() => {})
+        await delay(waitMs)
+        continue
+      }
+
+      throw new Error(`${err.message}\nGrok debug files kept at: ${workDir}`)
+    }
+  }
+
+  throw lastError
+}
+
+export function buildGrokArgs(config, workDir, promptFile, overrides = {}) {
+  const webFallback = overrides.webFallback === true
+  const maxTurns = webFallback ? config.grokFallbackMaxTurns : config.grokMaxTurns
+  const args = [
+    "--cwd",
+    workDir,
+    "--prompt-file",
+    promptFile,
+    "--output-format",
+    "json",
+    "--sandbox",
+    "read-only",
+    "--verbatim",
+    "--no-auto-update",
+    "--no-subagents",
+    "--no-plan",
+    "--max-turns",
+    String(maxTurns || (webFallback ? 8 : 1)),
+    "--effort",
+    config.grokEffort || "low",
+    "--system-prompt-override",
+    webFallback ? GROK_WEB_SYSTEM_PROMPT : GROK_TEXT_SYSTEM_PROMPT,
+    // An empty allowlist stops Grok from writing the wiki itself.
+    "--tools",
+    webFallback ? "web_search,web_fetch" : "",
+  ]
+
+  if (!webFallback) args.push("--disable-web-search")
+  if (config.model) args.push("-m", config.model)
+  return args
+}
+
+export function parseGrokResult(stdout) {
+  const raw = String(stdout || "").trim()
+  if (!raw) throw new Error("Grok CLI returned an empty final message")
+  const parsed = parseJsonObject(raw)
+  if (!parsed) throw new Error("Grok CLI returned invalid JSON")
+  if (parsed.type === "error") throw new Error(parsed.message || "Grok CLI returned an error")
+  if (typeof parsed.text !== "string" || !parsed.text.trim()) {
+    throw new Error("Grok CLI returned an empty final message")
+  }
+  return parsed.text
+}
+
+function parseJsonObject(raw) {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    const start = raw.indexOf("{")
+    const end = raw.lastIndexOf("}")
+    if (start === -1 || end <= start) return null
+    try {
+      return JSON.parse(raw.slice(start, end + 1))
+    } catch {
+      return null
+    }
+  }
+}
+
+function renderCliPrompt(messages, intro) {
+  return [
+    ...intro,
     "",
     ...messages.map((message) => [
-      `## ${message.role.toUpperCase()} MESSAGE`,
+      `## ${String(message.role || "user").toUpperCase()} MESSAGE`,
       "",
       message.content,
       "",
     ].join("\n")),
   ].join("\n")
+}
+
+function runGrok(bin, args, timeoutMs, stdoutFile, stderrFile, cwd) {
+  return new Promise((resolve, reject) => {
+    let settled = false
+    const stdout = createWriteStream(stdoutFile)
+    const child = spawn(bin, args, {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: {
+        ...process.env,
+        GROK_DISABLE_AUTOUPDATER: "1",
+        GROK_MEMORY: "0",
+      },
+      detached: process.platform !== "win32",
+    })
+    child.stdout.pipe(stdout)
+    const timer = timeoutMs
+      ? setTimeout(async () => {
+        if (settled) return
+        settled = true
+        await terminateProcessTree(child)
+        await finished(stdout).catch(() => {})
+        if (stderrFile) await writeFile(stderrFile, stderr, "utf8").catch(() => {})
+        reject(new Error(`Grok CLI timed out after ${timeoutMs}ms`))
+      }, timeoutMs)
+      : null
+    let stderr = ""
+
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString()
+      if (stderr.length > 12000) stderr = stderr.slice(-12000)
+    })
+    child.on("error", (err) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      stdout.destroy()
+      reject(err)
+    })
+    child.on("close", async (code, signal) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      await finished(stdout).catch(() => {})
+      if (stderrFile) await writeFile(stderrFile, stderr, "utf8").catch(() => {})
+      if (code === 0) {
+        resolve()
+      } else {
+        const reason = signal ? `with signal ${signal}` : `with exit code ${code}`
+        const stdoutText = await readFile(stdoutFile, "utf8").catch(() => "")
+        reject(new Error(`Grok CLI failed ${reason}:\n${summarizeGrokError(stderr, stdoutText)}`))
+      }
+    })
+  })
+}
+
+export function summarizeGrokError(stderr, stdout = "") {
+  const parsed = parseJsonObject(String(stdout || "").trim())
+  if (parsed?.type === "error" && parsed.message) return String(parsed.message)
+  if (typeof parsed?.message === "string" && parsed.message.trim()) return parsed.message.trim()
+  const lines = String(stderr || "").split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  const errors = lines.filter((line) => /error|failed|timed out/i.test(line))
+  if (errors.length) return [...new Set(errors)].slice(-5).join("\n")
+  if (lines.length) return lines.slice(-5).join("\n")
+  return "See stderr.log in the debug folder for details."
 }
 
 function runCodex(bin, args, stdin, timeoutMs, stderrFile) {

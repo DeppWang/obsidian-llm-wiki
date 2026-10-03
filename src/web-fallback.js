@@ -1,8 +1,21 @@
 import { chat } from "./llm-client.js"
 
+export function localCliName(llmConfig) {
+  return llmConfig?.provider === "grok" ? "Grok" : "Codex"
+}
+
+export function localFallbackSource(llmConfig) {
+  return llmConfig?.provider === "grok" ? "grok-fallback" : "codex-fallback"
+}
+
+export function isLocalFallbackSource(source) {
+  return source === "grok-fallback" || source === "codex-fallback"
+}
+
 export async function answerWithCodexFallback(question, llmConfig) {
+  const provider = llmConfig?.provider === "grok" ? "grok" : "codex"
   const answer = await chat(
-    { ...llmConfig, provider: "codex" },
+    { ...llmConfig, provider },
     [
       {
         role: "system",
@@ -18,7 +31,7 @@ export async function answerWithCodexFallback(question, llmConfig) {
         content: `问题：${question}`,
       },
     ],
-    { temperature: 0.1, max_tokens: 4096 },
+    { temperature: 0.1, max_tokens: 4096, webFallback: true },
   )
 
   return { answer, sources: [] }

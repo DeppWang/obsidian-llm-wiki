@@ -18,6 +18,16 @@
 npm run ingest
 ```
 
+也可以改用本机 `grok` CLI。Grok 只返回文字，不改 wiki 文件。文件仍由这个工具写入。
+
+```bash
+npm run ingest:grok -- --limit 1
+npm run query:grok -- "你的问题"
+npm run chat:grok
+```
+
+`LLM_WIKI_PROVIDER=grok` 和上面的命令是一回事。默认模型是 `grok-4.7`。已有的 `LLM_WIKI_MODEL` 如果不是 `grok` 开头，Grok 模式会忽略它，避免把 Codex 的模型名传给 Grok。
+
 查询当前 Wiki：
 
 ```bash
@@ -34,7 +44,7 @@ npm run chat
 
 1. 使用 `qmd query` 检索 `/Users/depp/Obsidian-Wiki/wiki` 对应的本地 QMD collection。
 2. 如果最高相关度达到阈值，基于 Wiki 检索结果生成答案。
-3. 如果 Wiki 没有足够信息，使用本机 Codex CLI 做 fallback 查询。
+3. 如果 Wiki 没有足够信息，使用本机 CLI 做 fallback 查询。默认是 Codex。`LLM_WIKI_PROVIDER=grok` 时用 Grok，并允许网页搜索。
 4. 将 markdown 记录和原始 JSON 写入 `/Users/depp/Obsidian-Wiki/raw/query`。
 
 常用参数：
@@ -151,10 +161,31 @@ qmd embed -f
 - `QMD_BIN`: qmd 可执行文件路径，默认 `qmd`
 - `QMD_TIMEOUT_MS`: qmd query 超时时间，默认 `60000`
 
+可选 Grok CLI 环境变量：
+
+- `LLM_WIKI_PROVIDER=grok`: 用本机 `grok`，不用 `codex`
+- `GROK_CLI`: grok 可执行文件路径，默认 `grok`
+- `GROK_MODEL`: 传给 `grok -m`，默认 `grok-4.7`
+- `GROK_EFFORT`: 传给 `grok --effort`，默认 `low`。这会盖过 `~/.grok/config.toml` 里的 reasoning 设置。
+- `GROK_TIMEOUT_MS`: Grok CLI 超时时间，默认 `600000`
+- `GROK_RETRIES`: 临时失败后的重试次数，默认 `2`
+- `GROK_MAX_TURNS`: 生成文字时的轮数，默认 `1`
+- `GROK_FALLBACK_MAX_TURNS`: Wiki 不够、需要搜网页时的轮数，默认 `8`
+
 工具会用如下方式调用 Codex：
 
 ```bash
 codex --sandbox read-only -a never exec --skip-git-repo-check --ephemeral -o <tmp-file> -
+```
+
+Grok 生成文字时会这样调用。工作目录是临时目录，所以不会读到本仓库的 `AGENTS.md`。
+
+```bash
+grok --cwd <tmp> --prompt-file <tmp>/prompt.md \
+  --output-format json --sandbox read-only --verbatim \
+  --no-auto-update --no-subagents --no-plan \
+  --max-turns 1 --effort low --tools "" --disable-web-search \
+  -m grok-4.7
 ```
 
 保留的 provider（不推荐，本需求不使用）：
