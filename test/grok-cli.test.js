@@ -49,6 +49,28 @@ test("show the grok error message without the prompt", () => {
   assert.equal(summarizeGrokError("hook: completed\nconnection failed"), "connection failed")
 })
 
+test("codex mode defaults to gpt-6.1-sol", () => {
+  const previous = {
+    LLM_WIKI_PROVIDER: process.env.LLM_WIKI_PROVIDER,
+    LLM_WIKI_MODEL: process.env.LLM_WIKI_MODEL,
+    OPENAI_MODEL: process.env.OPENAI_MODEL,
+  }
+  delete process.env.LLM_WIKI_PROVIDER
+  delete process.env.LLM_WIKI_MODEL
+  delete process.env.OPENAI_MODEL
+
+  try {
+    const config = loadLlmConfigFromEnv()
+    assert.equal(config.provider, "codex")
+    assert.equal(config.model, "gpt-6.1-sol")
+  } finally {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]
+      else process.env[key] = value
+    }
+  }
+})
+
 test("grok mode does not reuse a codex model name", () => {
   const previous = {
     LLM_WIKI_PROVIDER: process.env.LLM_WIKI_PROVIDER,
@@ -57,7 +79,7 @@ test("grok mode does not reuse a codex model name", () => {
     GROK_EFFORT: process.env.GROK_EFFORT,
   }
   process.env.LLM_WIKI_PROVIDER = "grok"
-  process.env.LLM_WIKI_MODEL = "gpt-5.6-luna"
+  process.env.LLM_WIKI_MODEL = "gpt-6.1-sol"
   delete process.env.GROK_MODEL
   delete process.env.GROK_EFFORT
 

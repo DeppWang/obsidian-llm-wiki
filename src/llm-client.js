@@ -99,7 +99,7 @@ export function loadLlmConfigFromEnv() {
 }
 
 function defaultModel(provider) {
-  if (provider === "codex") return "gpt-5.6-luna"
+  if (provider === "codex") return "gpt-6.1-sol"
   if (provider === "grok") return "grok-4.7"
   if (provider === "anthropic") return "claude-3-5-sonnet-latest"
   if (provider === "ollama") return "llama3.1"
