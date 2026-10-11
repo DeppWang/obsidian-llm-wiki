@@ -2,7 +2,7 @@ import path from "node:path"
 import { homedir } from "node:os"
 import { readdir, readFile } from "node:fs/promises"
 import { pathToFileURL } from "node:url"
-import { hasSourceTag, normalizeTag } from "./source-tags.js"
+import { hasSourceTag, isWikiSkipSource, normalizeTag } from "./source-tags.js"
 import { findBrokenWikiLinks, extractWikiLinks } from "./wiki-links.js"
 
 const STRUCTURAL_FILES = new Set(["index.md", "overview.md", "log.md", "reviews.md"])
@@ -106,12 +106,14 @@ function stripMd(value) {
   return value.replace(/\.md$/, "")
 }
 
-async function loadExpectedSources(sourceDir, tag) {
+export async function loadExpectedSources(sourceDir, tag) {
   const names = (await readdir(sourceDir)).filter((name) => name.endsWith(".md")).sort()
-  if (!tag) return names
   const matched = []
   for (const name of names) {
-    if (hasSourceTag(await readFile(path.join(sourceDir, name), "utf8"), tag)) matched.push(name)
+    const markdown = await readFile(path.join(sourceDir, name), "utf8")
+    if (isWikiSkipSource(markdown)) continue
+    if (tag && !hasSourceTag(markdown, tag)) continue
+    matched.push(name)
   }
   return matched
 }

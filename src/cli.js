@@ -8,7 +8,7 @@ import { writeFileBlocks, writeReviewBlocks } from "./file-blocks.js"
 import { loadRelatedPages, validatePageUpdates, validateWikiLinks } from "./ingest-context.js"
 import { generateWikiOutput } from "./ingest-generation.js"
 import { addSourceReference } from "./source-reference.js"
-import { hasSourceTag, normalizeTag } from "./source-tags.js"
+import { hasSourceTag, isWikiSkipSource, normalizeTag } from "./source-tags.js"
 import { homedir } from "node:os"
 import { loadNavigationCatalog, validateNavigationBlocks } from "./navigation.js"
 
@@ -30,7 +30,8 @@ export async function run(argv = process.argv.slice(2)) {
   if (!options.dryRun) await ensureWikiScaffold(outputDir)
 
   const purpose = await readOptional(ideaFile)
-  const files = await listSourceFiles(sourceDir, options)
+  const listed = await listSourceFiles(sourceDir, options)
+  const files = listed.files
   const plannedSourcePaths = files.map((filePath) => `wiki/sources/${path.basename(filePath).replace(/\.[^.]+$/, "")}.md`)
   const manifest = await loadManifest(outputDir)
   const startedAt = Date.now()
@@ -39,6 +40,7 @@ export async function run(argv = process.argv.slice(2)) {
   console.log(`Output dir: ${outputDir}`)
   console.log(`Provider: ${llmConfig.provider}, model: ${llmConfig.model}`)
   console.log(`Total files: ${files.length}`)
+  if (listed.excludedByWikiSkip) console.log(`Excluded by #Wiki-Skip: ${listed.excludedByWikiSkip}`)
   if (options.tag) console.log(`Tag: #${options.tag}`)
   if (options.dryRun) console.log("Dry run: files will not be written")
 
@@ -275,6 +277,7 @@ function printHelp() {
 
 Example: npm run ingest git ~/LLM-Wiki-0914
 Writes wiki pages under ~/LLM-Wiki-0914/wiki.
+Notes tagged #Wiki-Skip are left out.
 
 Options:
   --source-dir <dir>   Source markdown directory. Default: ${DEFAULT_SOURCE_DIR}
@@ -290,7 +293,7 @@ Options:
 `)
 }
 
-async function listSourceFiles(sourceDir, options) {
+export async function listSourceFiles(sourceDir, options) {
   const names = await readdir(sourceDir)
   let files = names
     .filter((name) => name.endsWith(".md"))
@@ -301,20 +304,28 @@ async function listSourceFiles(sourceDir, options) {
     const selected = new Set(options.only)
     files = files.filter((name) => selected.has(name))
   }
-  if (options.tag) {
-    const matched = []
-    for (const name of files) {
-      if (hasSourceTag(await readFile(path.join(sourceDir, name), "utf8"), options.tag)) matched.push(name)
+  const kept = []
+  let excludedByWikiSkip = 0
+  for (const name of files) {
+    const markdown = await readFile(path.join(sourceDir, name), "utf8")
+    if (isWikiSkipSource(markdown)) {
+      excludedByWikiSkip++
+      continue
     }
-    files = matched
+    if (options.tag && !hasSourceTag(markdown, options.tag)) continue
+    kept.push(name)
   }
+  files = kept
   if (options.startAfter) {
     const index = files.indexOf(options.startAfter)
     files = index >= 0 ? files.slice(index + 1) : files
   }
   if (Number.isFinite(options.limit)) files = files.slice(0, options.limit)
 
-  return files.map((name) => path.join(sourceDir, name))
+  return {
+    files: files.map((name) => path.join(sourceDir, name)),
+    excludedByWikiSkip,
+  }
 }
 
 async function ensureWikiScaffold(outputDir) {

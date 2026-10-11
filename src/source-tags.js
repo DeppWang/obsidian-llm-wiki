@@ -1,5 +1,11 @@
+export const WIKI_SKIP_TAG = "wiki-skip"
+
 export function normalizeTag(tag) {
   return tag.trim().replace(/^#/, "").toLowerCase()
+}
+
+export function isWikiSkipSource(markdown) {
+  return hasSourceTag(markdown, WIKI_SKIP_TAG)
 }
 
 export function hasSourceTag(markdown, tag) {

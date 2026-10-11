@@ -35,8 +35,8 @@ test("dry run loads custom schema in both stages without creating output", async
     const output = path.join(dir, "output")
     const schema = path.join(dir, "schema.md")
     await mkdir(source)
-    await writeFile(path.join(source, "note.md"), "#git\nA short note")
-    await writeFile(path.join(source, "second.md"), "#git\nA second note")
+    await writeFile(path.join(source, "note.md"), "#git\nA short note with enough extra text to stay in ingest.")
+    await writeFile(path.join(source, "second.md"), "#git\nA second note with enough extra text to stay in ingest.")
     await writeFile(path.join(source, "aaa.md"), "#github\nSkip this note")
     await writeFile(schema, "TEST WRITING RULE")
     process.env.LLM_WIKI_PROVIDER = "custom"
