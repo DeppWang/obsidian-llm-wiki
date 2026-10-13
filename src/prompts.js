@@ -1,3 +1,5 @@
+const CHINESE_TITLE_RULE = "文档标题使用中文：frontmatter 的 title、正文一级标题和各级小标题都用中文表达。保留必要的产品名、技术名和命令，如 Git、Kafka、SSH；有中文描述时不要整句使用英文。title 与正文一级标题保持一致，目录链接的显示名称也使用对应中文标题。新内容页的文件名使用中文标题，不使用英文 kebab-case。此规则优先于旧页和写作规则中的英文标题及英文文件名要求。更新旧页沿用已提供的路径，来源页使用指定路径；程序会统一按中文标题改名并更新链接。sources 保留原始笔记名。"
+
 export function buildAnalysisPrompt({ purpose, index, schema, sourceContent }) {
   return [
     "你是个人知识库的编辑。先理解笔记的实际用途，再决定怎样整理。",
@@ -6,37 +8,38 @@ export function buildAnalysisPrompt({ purpose, index, schema, sourceContent }) {
     "不要输出思维链、隐藏推理或思考过程，只写简洁但充分的最终分析。",
     "",
     "输出语言：中文。保留必要的英文专有名词。",
+    CHINESE_TITLE_RULE,
     "",
     "你的分析必须覆盖：",
     "先判断资料类型。命令速查、配置手册、操作步骤不能按普通文章压缩成摘要。",
     "为操作类资料输出覆盖表：原文功能组、读者要解决的问题、目标主题页路径、必须保留的命令与示例。相关命令围绕同一任务合并，不同独立任务分别建主题页。",
     "",
-    "## Key Entities",
+    "## 主要实体",
     "列出人物、组织、产品、项目、工具、数据集等实体。每个实体说明：",
     "- 名称和类型",
     "- 在源文档中的角色（核心或边缘）",
     "- 根据当前 index 判断它是否可能已存在于 wiki，引用准确路径或 slug；索引不等于读过正文",
     "",
-    "## Key Concepts",
+    "## 主要概念",
     "列出理论、方法、技术、现象、流程、实践等概念。每个概念说明：",
     "- 名称和简短定义",
     "- 为什么它在这个源文档中重要",
     "- 根据当前 index 判断它是否可能已存在于 wiki，引用准确路径或 slug；索引不等于读过正文",
     "",
-    "## Main Arguments & Findings",
+    "## 主要观点与发现",
     "- 源文档的核心主张、发现或操作经验是什么？",
     "- 支撑依据是什么？",
     "- 可信度、适用边界或上下文是什么？",
     "",
-    "## Connections to Existing Wiki",
+    "## 与已有知识库的关联",
     "- 它关联当前 wiki 中哪些页面？",
     "- 只有索引时只能提出关联候选，不能断言它强化或挑战了旧正文。",
     "",
-    "## Contradictions & Tensions",
+    "## 冲突与待确认问题",
     "- 它是否与当前 wiki 内容冲突？",
     "- 是否存在内部张力、例外、风险或待确认点？",
     "",
-    "## Recommendations",
+    "## 整理建议",
     "- 应创建或更新哪些 wiki 页面？",
     "- 哪些内容要重点展开，哪些只需轻量记录？",
     "- 哪些问题需要人工判断或后续深度研究？",
@@ -50,8 +53,9 @@ export function buildAnalysisPrompt({ purpose, index, schema, sourceContent }) {
   ].filter(Boolean).join("\n")
 }
 
-export function buildGenerationPrompt({ purpose, index, overview, schema, relatedPages = [], sourceFileName, sourceContent }) {
+export function buildGenerationPrompt({ purpose, index, overview, schema, relatedPages = [], sourceFileName, sourcePagePath, sourceContent }) {
   const sourceBaseName = sourceFileName.replace(/\.[^.]+$/, "")
+  const sourcePath = sourcePagePath || `wiki/sources/${sourceBaseName}.md`
   const today = new Date().toISOString().slice(0, 10)
 
   return [
@@ -59,6 +63,7 @@ export function buildGenerationPrompt({ purpose, index, overview, schema, relate
     "不要输出思维链、隐藏推理、解释性前言或分析复述。只输出 FILE/REVIEW blocks。",
     "",
     "输出语言：中文。保留必要的英文专有名词。",
+    CHINESE_TITLE_RULE,
     "",
     `## Source File`,
     `原始源文件是：${sourceFileName}`,
@@ -66,7 +71,7 @@ export function buildGenerationPrompt({ purpose, index, overview, schema, relate
     "",
     "## 必须生成的内容",
     "",
-    `1. 资料摘要页：wiki/sources/${sourceBaseName}.md，必须使用这个精确路径。`,
+    `1. 资料摘要页：${sourcePath}，必须使用这个精确路径。`,
     "2. 按需更新或创建实体页。允许零个。命令、配置项、文件名和泛称通常留在主题正文中。",
     "3. 按需更新或创建概念页。允许零个。按可独立查用的问题划分主题，不限制页面数量。多主题手册必须生成对应主题页，不能只写一个工具实体和一份来源整理页。单一主题短笔记才允许零个新概念页。",
     "4. 更新 wiki/index.md：保留已有条目，加入新条目。先按实体、概念、来源、查询、比较、综合组织；类型内条目多时，再按读者任务使用三级标题分组。每页只列一次。",
@@ -127,7 +132,7 @@ export function buildGenerationPrompt({ purpose, index, overview, schema, relate
     "- 大段空缺不在本次整理里补。点名笔记或已同意的 review 才写「外部资料」，必须带链接和查看日期，并用 external_sources 记录链接。没有外部资料时不要写这个字段。笔记没变且链接仍有效时保留，不重写。",
     "- 关键主张就近链接来源页。",
     "- 正文优先使用带目录和中文别名的链接，如 [[entities/gitlab|GitLab]]；只链接已存在或本次创建的页面。",
-    "- 仅非来源页文件名使用 kebab-case；来源页必须使用上面指定的精确路径，保留空格，不翻译或替换文件名。",
+    "- 新建非来源页使用中文标题作为文件名，如 wiki/concepts/Git 分支操作.md。来源页必须使用上面指定的精确路径。已有页面沿用提供的路径；程序在批次结束时统一改名和更新链接。",
     "- 不要为无价值的边缘词创建页面。",
     "- 如果当前 index 已有近似页面，沿用已有 slug。更新必须读到下面提供的完整旧正文。",
     "- 旧正文没有提供时，不输出该旧页的 FILE block；在来源页记录新发现，并输出 REVIEW。",
@@ -190,6 +195,7 @@ export function buildNavigationPrompt({ purpose, schema, index, overview, review
     "只输出 wiki/index.md、wiki/overview.md 和 wiki/reviews.md 三个完整 FILE blocks。",
     "不要输出 REVIEW block 或 FILE block 之外的文字。",
     "输出语言：中文。保留必要的英文专有名词。",
+    CHINESE_TITLE_RULE,
     "",
     "## index.md",
     "- 它是完整目录。下方页面目录中的每一页都必须链接一次，不能漏，不能重复。",
@@ -209,7 +215,7 @@ export function buildNavigationPrompt({ purpose, schema, index, overview, review
     "- 它只保留当前仍需人工判断的问题。使用现有的简单 Markdown 格式，不加 frontmatter。",
     "- 后续来源已经明确解决的问题必须删除。例如缺失页后来已建立并补入对应来源，就不再保留缺失复核。",
     "- 合并重复复核，但保留仍未解决的冲突、存疑命令和缺少证据的问题。不要自行回答未决问题。",
-    "- 没有问题时只写 `# Reviews`。",
+    "- 一级标题使用 `# 待确认问题`。没有问题时只写这个标题。",
     "",
     "## Frontmatter",
     `- 保留原 created，updated 改为 ${today}。`,

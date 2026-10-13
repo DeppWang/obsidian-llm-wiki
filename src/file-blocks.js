@@ -130,7 +130,7 @@ export async function writeReviewBlocks(projectPath, generation, sourceFileName,
   if (!dryRun) {
     await mkdir(path.dirname(reviewPath), { recursive: true })
     const existing = await readOptional(reviewPath)
-    const next = existing ? `${existing.trimEnd()}\n\n${rendered}\n` : `# Reviews\n\n${rendered}\n`
+    const next = existing ? `${existing.trimEnd()}\n\n${rendered}\n` : `# 待确认问题\n\n${rendered}\n`
     await writeFile(reviewPath, next, "utf8")
   }
 

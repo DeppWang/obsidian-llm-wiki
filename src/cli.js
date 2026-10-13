@@ -1,5 +1,5 @@
 import path from "node:path"
-import { mkdir, readdir, readFile, writeFile } from "node:fs/promises"
+import { mkdir, readdir, readFile, stat, writeFile } from "node:fs/promises"
 import { existsSync } from "node:fs"
 import { createHash } from "node:crypto"
 import { chat, loadLlmConfigFromEnv } from "./llm-client.js"
@@ -9,6 +9,8 @@ import { loadRelatedPages, validatePageUpdates, validateWikiLinks } from "./inge
 import { generateWikiOutput } from "./ingest-generation.js"
 import { addSourceReference } from "./source-reference.js"
 import { hasSourceTag, isWikiSkipSource, normalizeTag } from "./source-tags.js"
+import { assessSourceValue, markSourceSkipped } from "./source-value.js"
+import { migrateWikiFileNames } from "./wiki-filenames.js"
 import { homedir } from "node:os"
 import { loadNavigationCatalog, validateNavigationBlocks } from "./navigation.js"
 
@@ -32,8 +34,8 @@ export async function run(argv = process.argv.slice(2)) {
   const purpose = await readOptional(ideaFile)
   const listed = await listSourceFiles(sourceDir, options)
   const files = listed.files
-  const plannedSourcePaths = files.map((filePath) => `wiki/sources/${path.basename(filePath).replace(/\.[^.]+$/, "")}.md`)
   const manifest = await loadManifest(outputDir)
+  const plannedSourcePaths = files.map((filePath) => sourcePagePath(path.basename(filePath), getManifestRecord(manifest, path.basename(filePath))))
   const startedAt = Date.now()
 
   console.log(`Source dir: ${sourceDir}`)
@@ -61,6 +63,7 @@ export async function run(argv = process.argv.slice(2)) {
     const sourceContent = await readFile(filePath, "utf8")
     const sourceHash = sha256(sourceContent)
     const existingRecord = getManifestRecord(manifest, fileName)
+    const sourceWikiPath = sourcePagePath(fileName, existingRecord)
     if (!options.force && existingRecord?.sha256 === sourceHash) {
       skipped++
       logProgress({
@@ -77,6 +80,21 @@ export async function run(argv = process.argv.slice(2)) {
       sourceContent.length > MAX_SOURCE_CHARS
         ? `${sourceContent.slice(0, MAX_SOURCE_CHARS)}\n\n[...truncated...]`
         : sourceContent
+
+    logProgress({ fileName, current: done, total: files.length, status: "value check", startedAt })
+    const value = await assessSourceValue({
+      fileName,
+      markdown: truncatedContent,
+      generate: (messages) => chat(llmConfig, messages, { temperature: 0.1, max_tokens: 512 }),
+    })
+    if (!value.worthReading) {
+      if (!options.dryRun) await markSourceSkipped(filePath, sourceContent)
+      skipped++
+      logProgress({ fileName, current: done, total: files.length, status: "skipped", startedAt })
+      console.log(`Skipped: ${fileName}: ${value.reason}`)
+      console.log(`${options.dryRun ? "Would add" : "Added"} #Wiki-Skip: ${fileName}`)
+      continue
+    }
 
     const index = await readOptional(path.join(outputDir, "wiki/index.md"))
     const overview = await readOptional(path.join(outputDir, "wiki/overview.md"))
@@ -126,6 +144,7 @@ export async function run(argv = process.argv.slice(2)) {
             schema,
             relatedPages,
             sourceFileName: fileName,
+            sourcePagePath: sourceWikiPath,
             sourceContent: truncatedContent,
           }),
         },
@@ -153,7 +172,7 @@ export async function run(argv = process.argv.slice(2)) {
       ]
     const generated = await generateWikiOutput({
       messages: generationMessages,
-      sourcePath: `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`,
+      sourcePath: sourceWikiPath,
       outputDir,
       dryRun: options.dryRun,
       generate: (messages) => chat(llmConfig, messages, { temperature: 0.1, max_tokens: 8192 }),
@@ -162,7 +181,7 @@ export async function run(argv = process.argv.slice(2)) {
         await validateWikiLinks(outputDir, blocks, plannedSourcePaths)
       },
     })
-    const generation = addSourceReference(generated, `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`, filePath)
+    const generation = addSourceReference(generated, sourceWikiPath, filePath)
     const { writtenPaths, warnings } = await writeFileBlocks(outputDir, generation, { dryRun: options.dryRun })
     const reviews = await writeReviewBlocks(outputDir, generation, fileName, { dryRun: options.dryRun })
     for (const warning of warnings) console.warn(`Warning: ${warning}`)
@@ -214,7 +233,16 @@ export async function run(argv = process.argv.slice(2)) {
     console.log(`[navigation] done | elapsed=${formatDuration(Date.now() - startedAt)}, written=${writtenPaths.length}`)
   }
 
+  if (!options.dryRun) {
+    const renamed = await migrateWikiFileNames(outputDir)
+    if (renamed.renames.size) console.log(`Renamed wiki files: ${renamed.renames.size}. Backup: ${renamed.backupDir}`)
+  }
   console.log(`Finished: total=${files.length}, ingested=${ingested}, skipped=${skipped}, elapsed=${formatDuration(Date.now() - startedAt)}`)
+}
+
+function sourcePagePath(fileName, record) {
+  return record?.writtenPaths?.find((pagePath) => pagePath.startsWith("wiki/sources/") && pagePath.endsWith(".md"))
+    || `wiki/sources/${fileName.replace(/\.[^.]+$/, "")}.md`
 }
 
 function parseArgs(argv) {
@@ -278,6 +306,8 @@ function printHelp() {
 Example: npm run ingest git ~/LLM-Wiki-0914
 Writes wiki pages under ~/LLM-Wiki-0914/wiki.
 Notes tagged #Wiki-Skip are left out.
+Reads the most recently modified notes first.
+Checks each changed note for useful knowledge before wiki analysis.
 
 Options:
   --source-dir <dir>   Source markdown directory. Default: ${DEFAULT_SOURCE_DIR}
@@ -298,7 +328,6 @@ export async function listSourceFiles(sourceDir, options) {
   let files = names
     .filter((name) => name.endsWith(".md"))
     .filter((name) => name !== path.basename(DEFAULT_IDEA_FILE))
-    .sort((a, b) => a.localeCompare(b, "zh-Hans-CN"))
 
   if (options.only?.length) {
     const selected = new Set(options.only)
@@ -313,9 +342,12 @@ export async function listSourceFiles(sourceDir, options) {
       continue
     }
     if (options.tag && !hasSourceTag(markdown, options.tag)) continue
-    kept.push(name)
+    const { mtimeMs } = await stat(path.join(sourceDir, name))
+    kept.push({ name, mtimeMs })
   }
   files = kept
+    .sort((a, b) => b.mtimeMs - a.mtimeMs || a.name.localeCompare(b.name, "zh-Hans-CN"))
+    .map((file) => file.name)
   if (options.startAfter) {
     const index = files.indexOf(options.startAfter)
     files = index >= 0 ? files.slice(index + 1) : files
@@ -339,8 +371,8 @@ async function ensureWikiScaffold(outputDir) {
 
   await writeIfMissing(path.join(wikiDir, "index.md"), initialIndex())
   await writeIfMissing(path.join(wikiDir, "overview.md"), initialOverview())
-  await writeIfMissing(path.join(wikiDir, "log.md"), "# Log\n")
-  await writeIfMissing(path.join(wikiDir, "reviews.md"), "# Reviews\n")
+  await writeIfMissing(path.join(wikiDir, "log.md"), "# 更新记录\n")
+  await writeIfMissing(path.join(wikiDir, "reviews.md"), "# 待确认问题\n")
   await mkdir(path.join(outputDir, CACHE_DIR), { recursive: true })
 }
 
@@ -390,7 +422,7 @@ function initialOverview() {
   const today = new Date().toISOString().slice(0, 10)
   return `---
 type: overview
-title: Wiki Overview
+title: 知识库概览
 created: ${today}
 updated: ${today}
 tags: [overview]
@@ -398,7 +430,7 @@ related: []
 sources: []
 ---
 
-# Wiki Overview
+# 知识库概览
 
 这个 wiki 尚未 ingest 源文档。
 `

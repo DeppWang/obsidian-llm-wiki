@@ -66,6 +66,14 @@ npm run ingest -- git ~/LLM-Wiki-0914 \
 
 标签支持正文的 `#git` 和 frontmatter 中的 `tags`（单值、行内列表、分行列表）。忽略大小写，完整匹配，不匹配 `#github`、`#git-branch` 或 `#git/work`。跳过代码块、行内代码和注释里的标签。标签筛选先于 `--limit` 执行。也可使用 `--tag git --output-dir <dir>`。
 
+默认按修改时间从新到旧处理。对需要处理的笔记，先调用模型判断是否含有可复用的知识，再进行分析和生成。纯工作项、项目范围、进度、日程和临时安排会跳过，并显示原因；短笔记和包含方法、经验的项目笔记仍可保留。判断需要读取正文，会增加一次模型调用；每次最多使用前 50000 个字符。无法解析判断结果时会报错，不会直接跳过。`--force` 也会做此判断。`--limit` 限制候选笔记数，候选中被跳过的笔记不会用后续笔记补足。
+
+自动判断为跳过的笔记会在原文件中加上 `#Wiki-Skip`，下次直接跳过。保留原有 frontmatter 和正文，不重复加标签。`--dry-run` 只显示将添加标签，不修改原文件。如果判断期间原文件已有修改，会报错并保留新内容。要重新判断，先移除 `#Wiki-Skip`。
+
+生成或更新的 Wiki 内容页使用中文标题和中文文件名，例如「Git 分支操作.md」。必要的产品名和技术名保留英文。批次结束时，程序按标题统一改名，更新 Wiki 链接、related 和摄入缓存，并备份 Wiki 与缓存。原始 Obsidian 笔记不改名。index.md、overview.md、log.md、reviews.md 是程序固定入口，保留文件名。
+
+只迁移已有文件，无需重新调用模型：`node bin/obsidian-llm-wiki.js rename` 预览，`node bin/obsidian-llm-wiki.js rename --apply` 执行。可在命令后传入其他 Wiki 项目目录。遇到重名会停止，不覆盖已有文件。没有中文标题的页面保留原名。
+
 ```bash
 npm run ingest -- --limit 3
 npm run ingest -- --source-dir /Users/depp/Obsidian --output-dir /Users/depp/Obsidian-Wiki

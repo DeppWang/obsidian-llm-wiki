@@ -8,6 +8,20 @@ export function isWikiSkipSource(markdown) {
   return hasSourceTag(markdown, WIKI_SKIP_TAG)
 }
 
+export function addWikiSkipTag(markdown) {
+  if (isWikiSkipSource(markdown)) return markdown
+  const bom = markdown.startsWith("\uFEFF") ? "\uFEFF" : ""
+  const body = markdown.slice(bom.length)
+  const newline = body.includes("\r\n") ? "\r\n" : "\n"
+  const frontmatter = body.match(/^---\r?\n[\s\S]*?\r?\n---(?:\r?\n|$)/)
+  if (frontmatter) {
+    const header = frontmatter[0]
+    const gap = header.endsWith("\n") ? "" : newline
+    return `${bom}${header}${gap}#Wiki-Skip${newline}${newline}${body.slice(header.length)}`
+  }
+  return `${bom}#Wiki-Skip${newline}${newline}${body}`
+}
+
 export function hasSourceTag(markdown, tag) {
   const wanted = normalizeTag(tag)
   if (!wanted) return false

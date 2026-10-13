@@ -1,6 +1,6 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, writeFile, rm, access } from "node:fs/promises"
+import { mkdtemp, mkdir, readFile, writeFile, rm, access } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { loadRelatedPages, validatePageUpdates } from "../src/ingest-context.js"
@@ -38,24 +38,32 @@ test("dry run loads custom schema in both stages without creating output", async
     await writeFile(path.join(source, "note.md"), "#git\nA short note with enough extra text to stay in ingest.")
     await writeFile(path.join(source, "second.md"), "#git\nA second note with enough extra text to stay in ingest.")
     await writeFile(path.join(source, "aaa.md"), "#github\nSkip this note")
+    await writeFile(path.join(source, "work.md"), "#git\nProject work items only")
     await writeFile(schema, "TEST WRITING RULE")
     process.env.LLM_WIKI_PROVIDER = "custom"
     process.env.LLM_WIKI_ENDPOINT = "http://test.invalid"
     globalThis.fetch = async (_url, options) => {
       prompts.push(JSON.parse(options.body).messages)
-      const isAnalysis = prompts.length % 2 === 1
+      const isValueCheck = prompts.at(-1)[0].content.includes("Decide whether a note")
+      const isAnalysis = !isValueCheck && !prompts.at(-1).at(-1).content.includes("Source document to process:")
       const fileName = prompts.at(-1).at(-1).content.match(/Source document to process: \*\*(.+?)\*\*/)?.[1] || "note.md"
       const sourceName = fileName.replace(/\.md$/, "")
-      const content = isAnalysis ? "Keep one source page" : `---FILE: wiki/sources/${sourceName}.md---\n---\ntype: source\n---\n# Note\n---END FILE---`
+      const content = isValueCheck
+        ? JSON.stringify({ worthReading: !prompts.at(-1).at(-1).content.includes("Project work items only"), reason: "Test decision" })
+        : isAnalysis ? "Keep one source page" : `---FILE: wiki/sources/${sourceName}.md---\n---\ntype: source\n---\n# Note\n---END FILE---`
       return new Response(`data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n`)
     }
-    await run(["git", output, "--source-dir", source, "--schema-file", schema, "--only", "note.md", "--only", "second.md", "--dry-run"])
-    assert.equal(prompts.length, 4)
-    for (const messages of prompts) assert.match(messages[0].content, /TEST WRITING RULE/)
+    await run(["git", output, "--source-dir", source, "--schema-file", schema, "--only", "note.md", "--only", "second.md", "--only", "work.md", "--dry-run"])
+    assert.equal(prompts.length, 7)
+    const wikiPrompts = prompts.filter((messages) => !messages[0].content.includes("Decide whether a note"))
+    assert.equal(wikiPrompts.length, 4)
+    for (const messages of wikiPrompts) assert.match(messages[0].content, /TEST WRITING RULE/)
+    assert.ok(wikiPrompts.every((messages) => !messages.at(-1).content.includes("Project work items only")))
     assert.ok(prompts.some((messages) => messages.at(-1).content.includes("A short note")))
     assert.ok(prompts.some((messages) => messages.at(-1).content.includes("A second note")))
     assert.ok(prompts.every((messages) => !messages.at(-1).content.includes("Skip this note")))
     await assert.rejects(access(output), { code: "ENOENT" })
+    assert.equal(await readFile(path.join(source, "work.md"), "utf8"), "#git\nProject work items only")
   } finally {
     globalThis.fetch = oldFetch
     for (const key of Object.keys(process.env)) if (!(key in oldEnv)) delete process.env[key]

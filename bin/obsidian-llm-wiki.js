@@ -3,12 +3,13 @@
 import { run as runIngest } from "../src/cli.js"
 import { run as runChat } from "../src/chat-shell.js"
 import { run as runQuery } from "../src/query-cli.js"
+import { run as runRename } from "../src/wiki-filenames.js"
 import { runWithIngestLock } from "../src/ingest-lock.js"
 
 const [command, ...rest] = process.argv.slice(2)
-const runner = command === "query" ? runQuery : command === "chat" ? runChat : runIngest
-const args = command === "query" || command === "chat" || command === "ingest" ? rest : process.argv.slice(2)
-const isIngest = runner === runIngest
+const runner = command === "query" ? runQuery : command === "chat" ? runChat : command === "rename" ? runRename : runIngest
+const args = ["query", "chat", "ingest", "rename"].includes(command) ? rest : process.argv.slice(2)
+const isIngest = runner === runIngest || runner === runRename
 
 const task = isIngest ? runWithIngestLock(() => runner(args)) : runner(args)
 
